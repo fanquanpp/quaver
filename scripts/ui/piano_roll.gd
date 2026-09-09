@@ -46,6 +46,34 @@ var _drag_ref_tick := 0.0
 var _drag_ref_pitch := 0
 var _hover := {}
 var _kbd_midi := -1
+var _sb_cache := {}      # 音符/琴键 StyleBox 缓存（圆角抗锯齿）
+
+
+## 圆角音符样式（缓存按颜色；1px 深描边 + 圆角消除直角锯齿感）
+func _note_style(col: Color) -> StyleBoxFlat:
+	var key := col.to_html()
+	if not _sb_cache.has(key):
+		var s := StyleBoxFlat.new()
+		s.bg_color = col
+		s.border_color = Color(0, 0, 0, 0.45)
+		s.set_border_width_all(1)
+		s.set_corner_radius_all(3)
+		s.anti_aliasing = true
+		_sb_cache[key] = s
+	return _sb_cache[key]
+
+
+func _hover_style() -> StyleBoxFlat:
+	var key := "hover"
+	if not _sb_cache.has(key):
+		var s := StyleBoxFlat.new()
+		s.bg_color = Color(0, 0, 0, 0)
+		s.border_color = Color(1, 1, 1, 0.9)
+		s.set_border_width_all(2)
+		s.set_corner_radius_all(4)
+		s.anti_aliasing = true
+		_sb_cache[key] = s
+	return _sb_cache[key]
 
 
 func _ready() -> void:
@@ -274,25 +302,25 @@ func _draw() -> void:
 	var t0: float = maxf(_tick_at(MARGIN_L), 0.0)
 	var t1: float = _tick_at(w)
 
-	# 1. 行背景（黑键行更暗 + 调外行压暗）
+	# 1. 行背景（黑键行更暗 + 调外行压暗；行坐标取整防亚像素缝）
 	for p in range(p_lo, p_hi + 1):
-		var y := _y_of_pitch(p)
+		var y := floorf(_y_of_pitch(p))
 		draw_rect(Rect2(MARGIN_L, y, w - MARGIN_L, ROW_H - 1.0),
 				C["row_black"] if NoteKeys.is_black(p) else C["row_white"])
 		if scale_highlight and not Theory.in_scale(p, key_root, scale_notes):
 			draw_rect(Rect2(MARGIN_L, y, w - MARGIN_L, ROW_H - 1.0), Color(0, 0, 0, 0.28))
 
-	# 2. 竖向网格（小节/拍/16分，按缩放裁剪密度）
+	# 2. 竖向网格（小节/拍/16分，按缩放裁剪密度；对齐半像素保证 1px 线锐利无锯齿）
 	var bar := 16
 	if px_per_tick >= 5.0:
 		for t in range(int(t0), int(t1) + 1):
 			if t % bar == 0:
 				continue
-			var x := _x_of_tick(t)
+			var x := floorf(_x_of_tick(t)) + 0.5
 			var col: Color = C["gridbeat"] if t % 4 == 0 else C["grid16"]
 			draw_line(Vector2(x, MARGIN_T), Vector2(x, h), col, 1.0)
 	for b in range(int(t0 / bar), int(t1 / bar) + 1):
-		var xb := _x_of_tick(b * bar)
+		var xb := floorf(_x_of_tick(b * bar)) + 0.5
 		draw_line(Vector2(xb, MARGIN_T), Vector2(xb, h), C["gridbar"], 1.0)
 
 	# 3. 幽灵音符（其他轨，半透明）
@@ -302,19 +330,19 @@ func _draw() -> void:
 		for n in song.tracks[trk]["notes"]:
 			_draw_note(n, trk, 0.20)
 
-	# 4. 当前轨音符
+	# 4. 当前轨音符（力度档位量化到 0.05，避免样式缓存膨胀）
 	for n2 in song.track_notes(track_idx):
-		_draw_note(n2, track_idx, 0.55 + 0.45 * n2["v"], n2 == _hover)
+		_draw_note(n2, track_idx, 0.55 + 0.45 * snappedf(n2["v"], 0.05), n2 == _hover)
 
 	# 5. 新建预览
 	if not _temp.is_empty():
 		_draw_note(_temp, track_idx, 0.45, true)
 
-	# 6. 播放头
+	# 6. 播放头（整数对齐 2px 竖线 + 三角标记，锐利不闪）
 	if transport != null:
-		var xh := _x_of_tick(transport.playhead)
+		var xh := floorf(_x_of_tick(transport.playhead))
 		if xh >= MARGIN_L and xh <= w:
-			draw_line(Vector2(xh, MARGIN_T), Vector2(xh, h), C["playhead"], 1.5)
+			draw_line(Vector2(xh, MARGIN_T), Vector2(xh, h), C["playhead"], 2.0)
 			draw_colored_polygon(PackedVector2Array([
 				Vector2(xh - 5, MARGIN_T), Vector2(xh + 5, MARGIN_T), Vector2(xh, MARGIN_T + 6)
 			]), C["playhead"])
@@ -322,13 +350,11 @@ func _draw() -> void:
 	# 7. 左侧琴键列
 	draw_rect(Rect2(0, MARGIN_T, MARGIN_L - 2.0, view_h), C["bg"])
 	for p2 in range(p_lo, p_hi + 1):
-		var y2 := _y_of_pitch(p2)
+		var y2 := floorf(_y_of_pitch(p2))
 		var black := NoteKeys.is_black(p2)
 		var kw := MARGIN_L * (0.62 if black else 1.0) - 2.0
-		var kcol: Color = C["kbd_black"] if black else C["kbd_white"]
-		if _kbd_midi == p2:
-			kcol = Color("7fd3ff")
-		draw_rect(Rect2(0, y2, kw, ROW_H - 1.0), kcol)
+		var kcol: Color = Color("7fd3ff") if _kbd_midi == p2 else (C["kbd_black"] if black else C["kbd_white"])
+		draw_style_box(_kbd_style(kcol), Rect2(0, y2, kw, ROW_H - 1.0))
 		if p2 % 12 == 0:
 			var font := ThemeDB.fallback_font
 			draw_string(font, Vector2(kw - 20.0, y2 + ROW_H - 3.0), Theory.note_name(p2),
@@ -340,9 +366,21 @@ func _draw() -> void:
 	for b2 in range(int(t0 / bar), int(t1 / bar) + 1):
 		var xb2 := _x_of_tick(b2 * bar)
 		draw_string(font2, Vector2(xb2 + 3.0, 14), str(b2 + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, C["text"])
-	draw_rect(Rect2(0, 0, w, h), C["border"], false, 1.0)
-	draw_line(Vector2(0, MARGIN_T), Vector2(w, MARGIN_T), C["border"], 1.0)
-	draw_line(Vector2(MARGIN_L - 2.0, 0), Vector2(MARGIN_L - 2.0, h), C["border"], 1.0)
+	draw_rect(Rect2(0, 0, w, h), C["border"], false, 1.0, true)
+	draw_line(Vector2(0, MARGIN_T + 0.5), Vector2(w, MARGIN_T + 0.5), C["border"], 1.0)
+	draw_line(Vector2(MARGIN_L - 2.0 + 0.5, 0), Vector2(MARGIN_L - 2.0 + 0.5, h), C["border"], 1.0)
+
+
+## 琴键列小键样式（圆角 2px）
+func _kbd_style(col: Color) -> StyleBoxFlat:
+	var key := "kbd_" + col.to_html()
+	if not _sb_cache.has(key):
+		var s := StyleBoxFlat.new()
+		s.bg_color = col
+		s.set_corner_radius_all(2)
+		s.anti_aliasing = true
+		_sb_cache[key] = s
+	return _sb_cache[key]
 
 
 func _draw_note(n: Dictionary, track: int, alpha: float, highlight := false) -> void:
@@ -350,9 +388,8 @@ func _draw_note(n: Dictionary, track: int, alpha: float, highlight := false) -> 
 	var y := _y_of_pitch(n["p"])
 	if y < MARGIN_T - ROW_H or y > size.y or x > size.x:
 		return
-	var wpx: float = maxf(n["l"] * px_per_tick - 1.0, 2.0)
-	var r := Rect2(x, y, wpx, ROW_H - 1.0)
-	var col := _note_color(track, alpha)
-	draw_rect(r, col)
+	var wpx: float = maxf(n["l"] * px_per_tick - 1.0, 3.0)
+	var r := Rect2(floorf(x), floorf(y), wpx, ROW_H - 1.0)
+	draw_style_box(_note_style(_note_color(track, alpha)), r)
 	if highlight:
-		draw_rect(r, C["hover"], false, 1.0)
+		draw_style_box(_hover_style(), r)

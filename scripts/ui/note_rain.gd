@@ -72,14 +72,19 @@ func _draw() -> void:
 		var h: float = clampf(grow_ms / RISE_MS, 0.06, 1.0) * (size.y - 4.0)
 		var rise_ms: float = 0.0 if held else float(now - b["t1"])
 		var rise: float = clampf(rise_ms / RISE_MS, 0.0, 1.0)
-		var y: float = size.y - h - rise * size.y
+		# 整数像素对齐：填充矩形零锯齿
+		var x_px := floorf(x)
+		var w_px := maxf(ceilf(w), 2.0)
+		var h_px := maxf(ceilf(h), 3.0)
+		var y_px: float = floorf(size.y - h_px - rise * size.y)
 		var col: Color = b["col"]
 		col.a = (0.95 if held else 0.95 * (1.0 - rise))
-		var r := Rect2(x, y, w, h)
-		# 两段明暗造层次：顶部亮 / 主体本色
-		draw_rect(Rect2(r.position, Vector2(r.size.x, minf(6.0, r.size.y))), col.lightened(0.35))
-		draw_rect(Rect2(r.position + Vector2(0, minf(6.0, r.size.y)), Vector2(r.size.x, r.size.y - minf(6.0, r.size.y))), col)
-		draw_rect(r, Color(0, 0, 0, 0.25), false, 1.0)
+		var r := Rect2(x_px, y_px, w_px, h_px)
+		# 两段明暗造层次：顶部亮 / 主体本色 + 1px 抗锯齿描边
+		var band := minf(5.0, h_px)
+		draw_rect(Rect2(r.position, Vector2(r.size.x, band)), col.lightened(0.35))
+		draw_rect(Rect2(r.position + Vector2(0, band), Vector2(r.size.x, r.size.y - band)), col)
+		draw_rect(r, Color(0, 0, 0, 0.3), false, 1.0, true)
 	# 命中线：有键按住时发光
 	if any_held:
 		draw_rect(Rect2(0, size.y - 3.0, size.x, 2.0), Color("4fc3f7", 0.75))

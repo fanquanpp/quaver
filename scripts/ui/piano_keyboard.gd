@@ -46,9 +46,13 @@ const B_SCALE := Color("3f5347")
 const SCALE_DIM := Color("6a7078")
 
 const MAX_WHITE_W := 64.0
+const KEY_SCALE_MIN := 0.6
+const KEY_SCALE_MAX := 1.6
 
 var base_octave := 4
 var octaves := 2
+## 键宽缩放（1.0 = 上限 64px/白键；演奏页滑杆 / Ctrl+滚轮调节）
+var key_scale := 1.0
 var pressed := {}
 var show_labels := true
 var key_root := 0
@@ -69,19 +73,27 @@ func _init() -> void:
 
 func _layout() -> Dictionary:
 	var whites := 7 * octaves + 1
-	var ww: float = minf(size.x / float(whites), MAX_WHITE_W)
+	var ww: float = minf(size.x / float(whites), MAX_WHITE_W * key_scale)
 	var kb_w := ww * whites
 	var kb_h: float = minf(size.y - 8.0, ww * 6.2)
+	# 全部取整到整数像素：自绘键面/分隔线不再有亚像素锯齿
 	var ox := floorf((size.x - kb_w) * 0.5)
-	var oy := maxf(6.0, (size.y - kb_h) * 0.5)
-	var fall_h: float = clampf(kb_h * 0.09, 12.0, 24.0)
+	var oy := floorf(maxf(6.0, (size.y - kb_h) * 0.5))
+	var fall_h: float = floorf(clampf(kb_h * 0.09, 12.0, 24.0))
 	var rail_h := 7.0
-	var keys_h := kb_h - fall_h - rail_h
+	var keys_h: float = floorf(kb_h - fall_h - rail_h)
 	return {
 		"ww": ww, "kb_w": kb_w, "ox": ox, "oy": oy,
 		"fall_h": fall_h, "rail_h": rail_h, "keys_h": keys_h,
 		"keys_top": oy + fall_h,
 	}
+
+
+## 第 wi 个白键的整数像素矩形（右缘留 1px 键缝，缝隙精确 1px 不闪烁）
+func _white_rect(wi: int, L: Dictionary) -> Rect2:
+	var x0: float = L["ox"] + floorf(wi * L["ww"])
+	var x1: float = L["ox"] + floorf((wi + 1) * L["ww"])
+	return Rect2(x0, L["keys_top"], maxf(x1 - x0 - 1.0, 2.0), L["keys_h"])
 
 
 func _first_midi() -> int:
@@ -113,6 +125,12 @@ func _black_rect(midi: int, L: Dictionary) -> Rect2:
 	return Rect2(x, y, bw, bh)
 
 
+## 黑键的整数像素矩形（绘制用，消除亚像素边缘锯齿；命中测试仍用浮点版）
+func _black_rect_px(midi: int, L: Dictionary) -> Rect2:
+	var r := _black_rect(midi, L)
+	return Rect2(floorf(r.position.x), floorf(r.position.y), floorf(r.size.x), floorf(r.size.y))
+
+
 func _hit(pos: Vector2) -> int:
 	var L := _layout()
 	var lx: float = pos.x - L["ox"]
@@ -135,6 +153,13 @@ func _hit(pos: Vector2) -> int:
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			if mb.pressed and mb.ctrl_pressed:
+				# Ctrl+滚轮：整琴缩放
+				var f := 1.08 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.08
+				key_scale = clampf(key_scale * f, KEY_SCALE_MIN, KEY_SCALE_MAX)
+				queue_redraw()
+			return
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
 				var m := _hit(mb.position)
@@ -163,6 +188,21 @@ func set_pressed(midi: int, on: bool) -> void:
 		_press(midi)
 	else:
 		_release(midi)
+
+
+## 仅更新按压视觉，不触发 note_on/off 信号（多键盘同步专用，避免信号回环重复发声）
+func set_pressed_silent(midi: int, on: bool) -> void:
+	if on:
+		if pressed.has(midi):
+			return
+		pressed[midi] = true
+		_target[midi] = 1.0
+	else:
+		if not pressed.erase(midi):
+			return
+		_target[midi] = 0.0
+	set_process(true)
+	queue_redraw()
 
 
 func _press(midi: int) -> void:
@@ -212,6 +252,7 @@ func _draw() -> void:
 	var oy: float = L["oy"]
 	var ww: float = L["ww"]
 	var kb_w: float = L["kb_w"]
+	var kb_h: float = L["fall_h"] + L["keys_h"] + L["rail_h"]
 	var keys_top: float = L["keys_top"]
 	var keys_h: float = L["keys_h"]
 
@@ -220,20 +261,20 @@ func _draw() -> void:
 	var first := _first_midi()
 	var count := 12 * octaves + 1
 
-	# 1. 白键（渐变键面 + 侧缘 + 前缘，按压下沉）
+	# 1. 白键（渐变键面 + 侧缘 + 前缘，按压下沉；整数像素对齐）
 	for midi in range(first, first + count):
 		if NoteKeys.is_black(midi):
 			continue
-		_draw_white_key(midi, Rect2(ox + _white_index(midi) * ww, keys_top, ww - 1.0, keys_h))
+		_draw_white_key(midi, _white_rect(_white_index(midi), L))
 
 	# 2. 黑键投影 → 黑键（左受光/右暗/顶亮面，按压下沉）
 	for midi in range(first, first + count):
 		if NoteKeys.is_black(midi):
-			var br := _black_rect(midi, L)
+			var br := _black_rect_px(midi, L)
 			draw_rect(Rect2(br.position.x + 2.0, br.end.y, br.size.x, 6.0), Color(0, 0, 0, 0.18))
 	for midi in range(first, first + count):
 		if NoteKeys.is_black(midi):
-			_draw_black_key(midi, _black_rect(midi, L))
+			_draw_black_key(midi, _black_rect_px(midi, L))
 
 	# 3. 上盖板（压在键顶之上，制造"琴体在键后面"的层次）
 	draw_rect(Rect2(ox, oy, kb_w, L["fall_h"]), COL_FALLBOARD)
@@ -242,14 +283,17 @@ func _draw() -> void:
 	for midi in range(first, first + count, 12):
 		var wi := _white_index(midi)
 		var name_txt: String = "C%d" % (floori(midi / 12.0) - 1)
+		var wr := _white_rect(wi, L)
 		var tw := font.get_string_size(name_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
-		draw_string(font, Vector2(ox + wi * ww + ww * 0.5 - tw * 0.5, oy + L["fall_h"] - 6.0),
+		draw_string(font, Vector2(wr.position.x + wr.size.x * 0.5 - tw * 0.5, oy + L["fall_h"] - 6.0),
 				name_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("9aa3b2"))
 
 	# 4. 前条
 	draw_rect(Rect2(ox, keys_top + keys_h, kb_w, L["rail_h"]), COL_RAIL)
 	draw_rect(Rect2(ox, keys_top + keys_h, kb_w, 1.0), Color("0e1013"))
 	draw_rect(Rect2(ox, keys_top + keys_h + L["rail_h"] - 1.0, kb_w, 1.0), COL_RAIL_TOP)
+	# 琴体外框：一圈 1px 描边收束轮廓（抗锯齿）
+	draw_rect(Rect2(ox - 1.0, oy - 1.0, kb_w + 2.0, kb_h + 2.0), Color("0b0d10"), false, 1.0, true)
 
 	# 5. 键帽字母
 	if show_labels:
@@ -259,13 +303,14 @@ func _draw() -> void:
 				continue
 			var ts := font.get_string_size(lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
 			if NoteKeys.is_black(midi):
-				var br2 := _black_rect(midi, L)
+				var br2 := _black_rect_px(midi, L)
 				draw_string(font, Vector2(br2.position.x + br2.size.x * 0.5 - ts.x * 0.5,
 						br2.end.y - 6.0 - _depth.get(midi, 0.0) * 3.0), lbl,
 						HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("cfd4dc"))
 			else:
-				var wx := ox + _white_index(midi) * ww + (ww - 1.0) * 0.5
-				draw_string(font, Vector2(wx - ts.x * 0.5, keys_top + keys_h - 6.0), lbl,
+				var wr2 := _white_rect(_white_index(midi), L)
+				draw_string(font, Vector2(wr2.position.x + wr2.size.x * 0.5 - ts.x * 0.5,
+						keys_top + keys_h - 6.0), lbl,
 						HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("5c6068"))
 
 
@@ -311,9 +356,9 @@ func _draw_black_key(midi: int, r: Rect2) -> void:
 	draw_rect(Rect2(r.position, Vector2(r.size.x * 0.16, r.size.y)), B_LEFT if not on else body.lightened(0.04))
 	draw_rect(Rect2(r.position + Vector2(r.size.x * 0.16, 0), Vector2(r.size.x * 0.68, r.size.y)), body)
 	draw_rect(Rect2(r.position + Vector2(r.size.x * 0.84, 0), Vector2(r.size.x * 0.16, r.size.y)), B_RIGHT)
-	# 顶部亮面 + 描边
+	# 顶部亮面 + 描边（抗锯齿，轮廓干净）
 	draw_rect(Rect2(r.position, Vector2(r.size.x, maxf(r.size.y * 0.10, 4.0))), cap)
-	draw_rect(r, B_OUT, false, 1.0)
+	draw_rect(r, B_OUT, false, 1.0, true)
 	# 悬停微亮（动效反馈）
 	if not on and midi == _hover_midi:
 		draw_rect(Rect2(r.position, Vector2(r.size.x, r.size.y * 0.5)), Color(1, 1, 1, 0.06))
