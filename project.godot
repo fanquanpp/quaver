@@ -10,7 +10,7 @@ config_version=5
 
 [application]
 
-config/name="编曲趣 Bianqv"
+config/name="编趣 BianQu"
 config/description="纯电脑键盘弹奏 + 鼠标编曲的桌面端纯音乐工具（无外设依赖）"
 config/version="0.1.4"
 run/main_scene="res://scenes/main.tscn"

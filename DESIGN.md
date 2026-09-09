@@ -1,4 +1,4 @@
-# 编曲趣 Bianqv — 功能设计文档
+# 编趣 BianQu — 功能设计文档
 
 > 纯电脑键盘弹奏 + 鼠标点击编曲的桌面端纯音乐工具。
 > 技术栈：Godot 4.7（GDScript）· 音频：运行时合成引擎 · 美术：Aseprite 像素资产
@@ -283,3 +283,17 @@ res://
 - **保留**的反馈全部需要真实交互：按压下沉/染色（键盘）、按住拖拽/新建预览描边（卷帘）、走带播放头。后续迭代不要以"悬停"作为视觉反馈触发条件
 
 **文档**：README/DESIGN 补记 `/addons/gode/` 的 .gitignore 排除策略（全量约 234MB）、未安装时 GDScript 回退不受影响，以及 project.godot 本地两行（EventLoop autoload / `[native_extensions]`）"提交前剥离、提交后恢复"的维护流程。
+
+## 16. v0.1.4-beta 品牌更名与测试版发布（2026-09-10）
+
+**更名**：编曲趣 Bianqv → **编趣 BianQu**；GitHub 仓库 `fanquanpp/bianqv` → `fanquanpp/bianqu`（gh repo rename，旧名自动重定向）。品牌字符串全量替换（project.godot / README×2 / DESIGN / main_ui 标题与 .bsong 过滤器描述），本地目录名不变（仅为临时名）。
+
+**发布管线**：
+- `export_presets.cfg` 入库（.gitignore 移除该项）：Windows Desktop 预设，`embed_pck=true` 单文件、排除 `addons/gode/*` 与 `tests/*`（导出包走 GDScript 乐理回退，实测 `[Theory] 后端: gdscript` 正常）、打包 D3D12 运行库；产品名"编趣 BianQu"
+- 构建命令：`Godot_v4.7.2-stable_win64.exe --headless --path . --export-release "Windows Desktop" build/windows/BianQu.exe`（编辑器版本须与已装导出模板 4.7.2.stable 严格一致；**输出目录必须预先存在**，Godot 不会自建；导出前剥离 project.godot 的 gode 本地行避免加载报错）
+- 产物：`BianQu.exe` 约 109MB（zip 后 38MB），无头启动自检通过；发布为 GitHub Release **v0.1.4-beta**（prerelease）
+
+**「红色覆盖琴键区」排查结论（非本程序 Bug）**：
+- 现象：演奏页回声条+琴键整体被红色覆盖，鼠标活动时"频繁触发"，用户疑为悬停效果
+- 证据链：① 两轮全量源码检索无任何红色绘制/歌词代码；② 截图中出现手写体歌词文本——本作是纯音乐工具，全工程无歌词功能；③ 进程与窗口枚举发现 `cloudmusic.exe` 持有标题为**「桌面歌词」的顶层窗口**（网易云音乐）
+- 结论：红色层为**网易云音乐桌面歌词悬浮窗**叠在游戏窗口上方（其样式即红底手写字），随歌词刷新/鼠标活动而变化，被误认为程序内悬停效果。程序内悬停逻辑 v0.1.4 已按需求收敛：仅工具栏按钮保留描边式悬停，琴键/布局区域无任何悬停触发

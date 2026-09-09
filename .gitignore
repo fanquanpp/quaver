@@ -5,9 +5,8 @@
 # gode 运行时（体积原因不入库；安装步骤见 README「可选：TypeScript 乐理后端」）
 /addons/gode/
 
-# 导出产物
+# 导出产物（export_presets.cfg 入库，保证发布可复现）
 /export/
-export_presets.cfg
 *.pck
 *.exe
 
@@ -19,3 +18,4 @@ Thumbs.db
 
 # gode 编译缓存
 /.gode/
+/build/

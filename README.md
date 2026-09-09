@@ -1,6 +1,6 @@
 <div align="center">
 
-# 编曲趣 Bianqv
+# 编趣 BianQu
 
 **纯电脑键盘弹奏 + 鼠标点击编曲的桌面端纯音乐工具**
 
@@ -69,6 +69,8 @@
 - 关窗自动保存，下次启动自动恢复
 
 ## 快速开始
+
+> 不想配环境？直接在 [Releases](https://github.com/fanquanpp/bianqu/releases) 下载 Windows 测试版（单文件免安装）。
 
 1. 安装 [Godot 4.7+](https://godotengine.org/download)（标准版即可，无需 .NET）
 2. 克隆本仓库，用 Godot 打开 `project.godot`

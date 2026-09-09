@@ -1,5 +1,5 @@
 extends Control
-## 编曲趣 Bianqv —— 根界面
+## 编趣 BianQu —— 根界面
 ##
 ## UI 由代码构建（工具类应用便于迭代）；两个模式页：
 ##   演奏 = 屏幕大键盘（电脑键盘/鼠标弹奏 + 和弦模式）
@@ -193,7 +193,7 @@ func _build_header() -> Control:
 		logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		hb.add_child(logo)
 	var title := Label.new()
-	title.text = "编曲趣"
+	title.text = "编趣"
 	title.add_theme_font_size_override("font_size", 16)
 	hb.add_child(title)
 
@@ -529,13 +529,13 @@ func _build_dialogs() -> void:
 	_save_dlg = FileDialog.new()
 	_save_dlg.file_mode = FileDialog.FILE_MODE_SAVE_FILE
 	_save_dlg.access = FileDialog.ACCESS_FILESYSTEM
-	_save_dlg.filters = PackedStringArray(["*.bsong ; 编曲趣工程"])
+	_save_dlg.filters = PackedStringArray(["*.bsong ; 编趣工程"])
 	_save_dlg.file_selected.connect(_on_saved)
 	add_child(_save_dlg)
 	_open_dlg = FileDialog.new()
 	_open_dlg.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	_open_dlg.access = FileDialog.ACCESS_FILESYSTEM
-	_open_dlg.filters = PackedStringArray(["*.bsong ; 编曲趣工程"])
+	_open_dlg.filters = PackedStringArray(["*.bsong ; 编趣工程"])
 	_open_dlg.file_selected.connect(_on_opened)
 	add_child(_open_dlg)
 	_wav_dlg = FileDialog.new()
