@@ -60,7 +60,6 @@ var scale_notes: Array = [0, 2, 4, 5, 7, 9, 11]
 var scale_highlight := false
 
 var _mouse_midi := -1
-var _hover_midi := -1
 var _depth := {}   # midi -> 0..1 按压深度（动画）
 var _target := {}  # midi -> 目标深度
 
@@ -171,10 +170,6 @@ func _gui_input(event: InputEvent) -> void:
 				_mouse_midi = -1
 	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
-		var hov := _hit(mm.position)
-		if hov != _hover_midi:
-			_hover_midi = hov
-			queue_redraw()
 		if _mouse_midi >= 0 and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 			var m := _hit(mm.position)
 			if m >= 0 and m != _mouse_midi:
@@ -341,9 +336,6 @@ func _draw_white_key(midi: int, r: Rect2) -> void:
 	draw_rect(Rect2(face.position, Vector2(1.0, face.size.y)), W_EDGE_L)
 	draw_rect(Rect2(face.position.x + face.size.x - 1.0, face.position.y, 1.0, face.size.y), W_EDGE_R)
 	draw_rect(Rect2(face.position.x, face.end.y - 2.0, face.size.x, 2.0), W_ON_FRONT if on else W_FRONT)
-	# 悬停微亮（动效反馈）
-	if not on and midi == _hover_midi:
-		draw_rect(face, Color(1, 1, 1, 0.08))
 
 
 func _draw_black_key(midi: int, r: Rect2) -> void:
@@ -359,9 +351,6 @@ func _draw_black_key(midi: int, r: Rect2) -> void:
 	# 顶部亮面 + 描边（抗锯齿，轮廓干净）
 	draw_rect(Rect2(r.position, Vector2(r.size.x, maxf(r.size.y * 0.10, 4.0))), cap)
 	draw_rect(r, B_OUT, false, 1.0, true)
-	# 悬停微亮（动效反馈）
-	if not on and midi == _hover_midi:
-		draw_rect(Rect2(r.position, Vector2(r.size.x, r.size.y * 0.5)), Color(1, 1, 1, 0.06))
 	# 按下时底部发光反馈
 	if on:
 		draw_rect(Rect2(r.position.x + 1.0, r.end.y - 2.0, r.size.x - 2.0, 2.0), B_ON_GLOW)

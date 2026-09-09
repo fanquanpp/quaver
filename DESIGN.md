@@ -133,10 +133,12 @@ theory_engine.gd（门面 autoload）
 ```
 
 **gode 注意事项**（实测踩坑）：
-- 从 GitHub Releases 下载 `gode.zip`（224MB 压缩 / 全平台解压 711MB）。按"存储优化"原则只解压 `binary/windows`，其余平台二进制按需补充；实际安装后约 131MB。
+- 从 GitHub Releases 下载 `gode.zip`（224MB 压缩 / 全平台解压 711MB）。按"存储优化"原则只解压 `binary/windows`，其余平台二进制按需补充；全量本地安装约 **234MB**（2026-09-10 实测）。
+- **仓库层面 `/addons/gode/` 已被 .gitignore 整体排除**（超 GitHub 单文件限制），克隆不含插件也能完整运行（Theory 门面自动回退 GDScript）；手动安装步骤见 README。
 - 插件启用需重启编辑器（TS 编译服务随编辑器插件加载；游戏运行时 GDExtension 独立生效）。
 - `TypeScriptScript` 资源**不支持 `.new()`**，须用 `Node.new()` + `set_script(ts_script)` 实例化。
 - gode 启用后会自动注册 `EventLoop` autoload 与 `[native_extensions]` 配置，勿手动删除。
+- 上条的两处自动注册只存在于**本地** project.godot——它们指向被忽略的插件文件，**提交前必须剥离**（仓库版不含 EventLoop autoload 与 [native_extensions] 两节，否则无插件环境启动报错），提交后在本地恢复。README「维护者注意」有同款说明。
 
 **插件策略**：引擎原生 API 全覆盖 UI/音频；混合语言用 gode；未来音源升级优先评估 [Clef Midi](https://store.godotengine.org/asset/star-weaver/clef-midi/)（SF2 合成）而非自研 GDExtension。
 
@@ -181,7 +183,7 @@ res://
 │       └── piano_roll.gd  # 钢琴卷帘
 ├── assets/sprites/        # Aseprite 导出产物（logo/icons 图集/应用图标）
 ├── aseprite/              # Aseprite 源文件
-└── addons/gode/           # gode 2.4.4（仅保留 Windows 二进制，131MB）
+└── addons/gode/           # gode 2.4.4（本地安装约 234MB；.gitignore 排除，不入库）
 ```
 
 ## 10. 路线图
@@ -272,3 +274,12 @@ res://
 **工程卫生**：`docs/` 加 `.gdignore`（截图不再被引擎导入，清掉误生成的 .import）。
 
 **布局调研依据**：DAW 通用三区结构（走带/参数工具栏 + 主编辑区 + 常驻演奏输入）+ 可拖分隔的工作区（Ableton/FL Studio 惯例，见 §12 引用）；绘制细节依据 Godot 官方 2D 抗锯齿行为（`draw_rect/draw_line` 默认无 AA、亚像素坐标是锯齿主因）与 StyleBox 抗锯齿圆角能力。联网搜索服务本日限流，文档结论以官方文档+既往调研（§1/§12）交叉验证。
+
+## 15. v0.1.4 移除悬停高亮 + 插件目录排除文档化（2026-09-10）
+
+**移除悬停触发效果（用户反馈：触发太过频繁）**：
+- 演奏键盘：删除"悬停微亮"（白键 8% / 黑键 6% 叠色）及 `_hover_midi` 追踪——鼠标滑过不再触发重绘
+- 编曲卷帘：删除音符悬停描边（此前似"选中高亮"，扫过即闪）；空闲鼠标移动不再做命中测试与重绘（顺带的性能收益）
+- **保留**的反馈全部需要真实交互：按压下沉/染色（键盘）、按住拖拽/新建预览描边（卷帘）、走带播放头。后续迭代不要以"悬停"作为视觉反馈触发条件
+
+**文档**：README/DESIGN 补记 `/addons/gode/` 的 .gitignore 排除策略（全量约 234MB）、未安装时 GDScript 回退不受影响，以及 project.godot 本地两行（EventLoop autoload / `[native_extensions]`）"提交前剥离、提交后恢复"的维护流程。

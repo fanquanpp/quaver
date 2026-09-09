@@ -24,7 +24,6 @@ const C := {
 	"grid16": Color("2b313c"), "gridbeat": Color("343b48"), "gridbar": Color("49536a"),
 	"ruler": Color("1a1d24"), "kbd_white": Color("d8dbe0"), "kbd_black": Color("2f333c"),
 	"playhead": Color("ff5252"), "text": Color("8f97a6"), "border": Color("3a4150"),
-	"hover": Color("ffffff"),
 }
 
 var song: SongModel
@@ -44,7 +43,7 @@ var _temp := {}          # 新建中的音符 {p,s,l}
 var _drag_orig := {}
 var _drag_ref_tick := 0.0
 var _drag_ref_pitch := 0
-var _hover := {}
+var _hover := {}         # 正在拖拽/改长的音符引用（拖拽机制用，不作悬停高亮）
 var _kbd_midi := -1
 var _sb_cache := {}      # 音符/琴键 StyleBox 缓存（圆角抗锯齿）
 
@@ -220,13 +219,7 @@ func _release_left() -> void:
 func _mouse_motion(pos_m: InputEventMouseMotion) -> void:
 	var pos := pos_m.position
 	if _drag == -1:
-		var tick := _snapped(maxf(_tick_at(pos.x), 0.0))
-		var pitch := _pitch_at(pos.y)
-		var n := song.note_at(track_idx, pitch, tick) if pos.x >= MARGIN_L and pos.y >= MARGIN_T else {}
-		if n != _hover:
-			_hover = n
-			queue_redraw()
-		return
+		return  # 无拖拽时鼠标移动不触发重绘（悬停高亮已按用户要求移除）
 	if pos.x < MARGIN_L:
 		return
 	var tick_f := maxf(_tick_at(pos.x), 0.0)
@@ -330,9 +323,9 @@ func _draw() -> void:
 		for n in song.tracks[trk]["notes"]:
 			_draw_note(n, trk, 0.20)
 
-	# 4. 当前轨音符（力度档位量化到 0.05，避免样式缓存膨胀）
+	# 4. 当前轨音符（力度档位量化到 0.05，避免样式缓存膨胀；不做悬停高亮）
 	for n2 in song.track_notes(track_idx):
-		_draw_note(n2, track_idx, 0.55 + 0.45 * snappedf(n2["v"], 0.05), n2 == _hover)
+		_draw_note(n2, track_idx, 0.55 + 0.45 * snappedf(n2["v"], 0.05))
 
 	# 5. 新建预览
 	if not _temp.is_empty():
