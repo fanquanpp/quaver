@@ -1,4 +1,4 @@
-# 编趣 BianQu — 功能设计文档
+# 编趣 Quaver — 功能设计文档
 
 > 纯电脑键盘弹奏 + 鼠标点击编曲的桌面端纯音乐工具。
 > 技术栈：Godot 4.7（GDScript）· 音频：运行时合成引擎 · 美术：Aseprite 像素资产
@@ -286,12 +286,13 @@ res://
 
 ## 16. v0.1.4-beta 品牌更名与测试版发布（2026-09-10）
 
-**更名**：编曲趣 Bianqv → **编趣 BianQu**；GitHub 仓库 `fanquanpp/bianqv` → `fanquanpp/bianqu`（gh repo rename，旧名自动重定向）。品牌字符串全量替换（project.godot / README×2 / DESIGN / main_ui 标题与 .bsong 过滤器描述），本地目录名不变（仅为临时名）。
+**更名**：编曲趣 Bianqv → **编趣 Quaver**（Quaver = 八分音符音乐术语，开头 Qu 保留"编趣"拼音首字母；更名链 编曲趣 Bianqv → 编趣 BianQu → 编趣 Quaver，同日两次）；GitHub 仓库 `fanquanpp/bianqv` → `fanquanpp/quaver`（gh repo rename，旧名自动重定向）。品牌字符串全量替换（project.godot / README×2 / DESIGN / main_ui 标题与 .bsong 过滤器描述），本地目录名不变（仅为临时名）。**仓库 About 描述与话题标签（godot/music/piano/sequencer/chiptune）同步更新**——repo rename 不会自动改 About，需 `gh repo edit --description/--add-topic` 单独处理。
 
 **发布管线**：
-- `export_presets.cfg` 入库（.gitignore 移除该项）：Windows Desktop 预设，`embed_pck=true` 单文件、排除 `addons/gode/*` 与 `tests/*`（导出包走 GDScript 乐理回退，实测 `[Theory] 后端: gdscript` 正常）、打包 D3D12 运行库；产品名"编趣 BianQu"
-- 构建命令：`Godot_v4.7.2-stable_win64.exe --headless --path . --export-release "Windows Desktop" build/windows/BianQu.exe`（编辑器版本须与已装导出模板 4.7.2.stable 严格一致；**输出目录必须预先存在**，Godot 不会自建；导出前剥离 project.godot 的 gode 本地行避免加载报错）
-- 产物：`BianQu.exe` 约 109MB（zip 后 38MB），无头启动自检通过；发布为 GitHub Release **v0.1.4-beta**（prerelease）
+- `export_presets.cfg` 入库（.gitignore 移除该项）：Windows Desktop 预设，`embed_pck=true` 单文件、排除 `addons/gode/*` 与 `tests/*`（导出包走 GDScript 乐理回退，实测 `[Theory] 后端: gdscript` 正常）、打包 D3D12 运行库；产品名"编趣 Quaver"
+- 构建命令：`Godot_v4.7.2-stable_win64.exe --headless --path . --export-release "Windows Desktop" build/windows/Quaver.exe`（编辑器版本须与已装导出模板 4.7.2.stable 严格一致；**输出目录必须预先存在**，Godot 不会自建）
+- **必须在干净副本中导出**（`git worktree add ../quaver-build HEAD` 后在副本执行）：本机安装的 gode 会在每次编辑器实例启动时把 `[native_extensions]` 写回 project.godot 并把插件二进制拷进导出目录——即使导出前手动剥离也会被写回。副本不含被 gitignore 的 addons/gode，天然干净；导出包实测无 UID 报错、走 GDScript 乐理回退
+- 产物：`Quaver.exe` 约 109MB（zip 后 38MB），无头启动自检通过；发布为 GitHub Release **v0.1.4-beta**（prerelease）
 
 **「红色覆盖琴键区」排查结论（非本程序 Bug）**：
 - 现象：演奏页回声条+琴键整体被红色覆盖，鼠标活动时"频繁触发"，用户疑为悬停效果

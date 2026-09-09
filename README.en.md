@@ -1,6 +1,6 @@
 <div align="center">
 
-# BianQu 编趣
+# Quaver 编趣
 
 **Play piano with your computer keyboard. Arrange with your mouse. Pure instrumental music, zero extra hardware.**
 
@@ -14,7 +14,7 @@
 
 ---
 
-BianQu is a lightweight desktop music tool for **small game developers, sound designers, and total beginners**: play melodies on your QWERTY keyboard, record them into a piano roll, arrange with the mouse, and export a WAV your game engine can use directly.
+Quaver is a lightweight desktop music tool for **small game developers, sound designers, and total beginners**: play melodies on your QWERTY keyboard, record them into a piano roll, arrange with the mouse, and export a WAV your game engine can use directly.
 
 Out of scope by design: vocals, lyrics, MIDI hardware, professional mixing. Pure instrumental, instant fun.
 
