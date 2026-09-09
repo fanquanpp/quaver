@@ -1,0 +1,245 @@
+# 编曲趣 Bianqv — 功能设计文档
+
+> 纯电脑键盘弹奏 + 鼠标点击编曲的桌面端纯音乐工具。
+> 技术栈：Godot 4.7（GDScript）· 音频：运行时合成引擎 · 美术：Aseprite 像素资产
+
+---
+
+## 1. 产品定位
+
+| 维度 | 决策 |
+|---|---|
+| 目标用户 | 小型游戏开发者（要音效/BGM）、音效制作者、纯音乐编曲爱好者、音乐学习新手、娱乐用户 |
+| 输入方式 | **仅电脑键盘弹奏 + 鼠标点击/拖拽**，不接 MIDI 键盘等任何外设 |
+| 内容范围 | 纯器乐（旋律/和声/节奏），**不做歌词、演唱、录音、混音级 DAW 功能** |
+| 平台 | 仅 Windows 桌面端（Godot 天然可扩展 mac/linux） |
+| 核心体验 | 打开就能弹、随手就能录、点几下就能排、新手不用懂乐理也能写对音 |
+
+### 竞品/参考调研结论（2026-09 联网调研）
+
+- **FL Studio Piano Roll** 的 *Scale Highlighting（调性高亮）+ Chord Stamp（和弦戳）* 是新手钢琴卷帘的黄金组合：调外音变暗后"几乎不可能写错音"（参考 [EDMProd](https://www.edmprod.com/fl-studio-piano-roll/)、[FL 官方手册](https://www.image-line.com/fl-studio-learning/fl-studio-beta-online-manual/html/pianoroll.htm)）→ 本作全套借鉴。
+- **Godot 4 原生 `InputEventMIDI`** 已支持 MIDI 输入（[官方文档](https://docs.godotengine.org/en/4.4/classes/class_inputeventmidi.html)），但按需求本作走"键盘即琴键"路线，MIDI 仅作为未来可选扩展。
+- GitHub 可借鉴项目：[SeleDreams/Godot-PianoRoll](https://github.com/SeleDreams/Godot-PianoRoll)（Godot 3 卷帘实现，思路参考）、[sfzinstruments/SalamanderGrandPiano](https://github.com/sfzinstruments/SalamanderGrandPiano)（免费钢琴采样，未来采样音源）、Asset Library 的 [Clef Midi](https://store.godotengine.org/asset/star-weaver/clef-midi/)（Godot 4.6+ 的 SF2 SoundFont 实时合成插件，未来音源升级方向）、[nlaha/godot-midi](https://github.com/nlaha/godot-midi)（MIDI 文件解析参考）。
+- 音频架构选型参考：Godot 论坛/GitHub Issue 关于 [AudioStreamPolyphonic 的实践](https://github.com/godotengine/godot-docs/issues/9488) —— 本作采用**预渲染采样 + 播放器池**（见 §4），规避实时 DSP 的延迟与 GC 抖动。
+
+---
+
+## 2. 用户故事 → 功能映射
+
+| 用户 | 故事 | 对应功能 |
+|---|---|---|
+| 新手 | "我不懂乐理，也想弹得好听" | 调性辅助：调外键变灰不可"难按错"；**和弦模式**（按一个键出整个三和弦） |
+| 新手 | "我不知道哪个电脑键对应哪个琴键" | 屏幕键盘上直接印电脑键帽字母，实时高亮按下状态 |
+| 娱乐用户 | "我想随便弹着玩" | 演奏模式：全屏大键盘，即时发声，八度一键切换 |
+| 编曲用户 | "我弹的东西想留下来" | 录制模式：弹奏实时落入钢琴卷帘，自动量化到 1/16 |
+| 编曲用户 | "我想用鼠标精细修" | 铅笔工具：左键画音符拖长度、拖动移位、右键删除；对齐网格可调 |
+| 游戏开发者 | "我要把成品导出给引擎用" | 一键导出 WAV（实时总线录制）；工程文件极小（zstd 二进制） |
+| 游戏开发者 | "我想要芯片音效风格" | 内置音色组：钢琴 / 芯片方波 / 柔弦 Pad / 贝斯（纯合成，0 采样体积） |
+| 所有人 | "打开别是空的" | 内置示范曲《小星星》双轨工程，首次启动自动加载 |
+
+**明确不做**（范围控制）：歌词/演唱/麦克风、VST 支持、多轨混音台、自动化包络、乐谱打印。
+
+---
+
+## 3. 功能设计
+
+### 3.1 演奏模式（Play）
+- 屏幕大键盘 2 个八度（C3–C5），支持**鼠标点击弹奏**与**电脑键盘弹奏**并行。
+- 电脑键位（FL Studio 惯例布局，物理键位布局无关）：
+  - 低八度白键 `Z X C V B N M , . /`，黑键 `S D G H J L ;`
+  - 高八度白键 `Q W E R T Y U I O P`，黑键 `2 3 5 6 7 9 0`
+  - `↑ / ↓` 整体升降八度（1–7），当前八度在键盘上标注 C4 等音名
+- **调性辅助**：选择"调 + 音阶"后，调内键帽高亮，帮助新手建立肌肉记忆。
+- **和弦模式**：按下单键自动补齐该调内的三和弦（根音+三音+五音），一键出和声。
+- 键帽提示开关（默认开，印字在琴键上）。
+
+### 3.2 编曲模式（Arrange）
+- **钢琴卷帘**：横向为时间（1 tick = 1/16 音符），纵向为音高（A0–C8 共 88 键），左侧内嵌迷你琴键列（可点击试听），顶部标尺（小节号，点击跳播）。
+- 鼠标交互（零学习成本优先）：
+  - 左键空白 = 新建音符，**横向拖拽定长度**（实时预览+试听）
+  - 左键按住已有音符 = 移动（音高+时间）；抓住右缘 = 改长度
+  - 右键 = 删除（按住扫删）
+  - 滚轮 = 上下（音高）；Shift+滚轮 = 左右（时间）；Ctrl+滚轮 = 缩放
+  - 全程网格吸附（1/16、1/8、1/4、整拍、关闭可选）
+- **多轨**：v0.1 两轨（主旋律 / 和弦伴奏），每轨独立音色；未选中轨以"幽灵音符"半透明显示（FL Studio ghost notes 惯例）。
+- **调性辅助**：同演奏模式共享调/音阶设置，卷帘中调外行整行变暗。
+- 传输条：播放 / 停止 / 循环 / BPM(40–240) / 录制（弹奏即录入，自动量化）。
+- 工程：保存/打开 `.bsong`（见 §6）、导出 WAV、重载示范曲。
+
+### 3.3 音色（合成器音源）
+| 音色 | 合成方式 | 用途 |
+|---|---|---|
+| 钢琴 | 7 次谐波加法合成 + 频率微失谐 + 锤击噪声瞬态 + 分音区衰减 | 主旋律 |
+| 芯片 | 25% 占空比方波 + 两段衰减 | 游戏音效/BGM |
+| 柔弦 | 正弦对（±0.3% 失谐合唱）+ 慢起音 | 铺底和弦 |
+| 贝斯 | 正弦 + 二次谐波 | 低音 |
+
+---
+
+## 4. 音频引擎架构（性能核心）
+
+```
+InputEventKey ─┐
+鼠标/卷帘 ─────┼─→ MainUI(事件路由) ─→ Synth.play_note(inst, midi, vel)
+录制 ──────────┘                          │
+                                          ▼
+InstrumentBank(后台线程预渲染):            播放器池 ×32 AudioStreamPlayer
+  每音色×4个基音(C2/C3/C4/C5)              ├─ 空闲分配 / 最旧抢占
+  AudioStreamWAV(22050Hz 单声道 16bit)     ├─ note-off: 0.12s 淡出(延续自然衰减)
+  ~1.4MB 内存, 首次生成后 zstd 磁盘缓存    └─ Synth 总线: Limiter 防削波
+```
+
+**关键决策：预渲染采样而非实时合成**
+- `AudioStreamGenerator` 每 _process 从 GDScript 填缓冲 → 帧率波动直接变音频抖动，且键盘实时弹奏延迟敏感，**否决**。
+- 每音符实时 DSP → GDScript 每秒百万级浮点运算，多复音必卡，**否决**。
+- **预渲染 4 基音 + `pitch_scale` 移调**（±6 半音内）→ 播放期零 DSP，只有采样回放；内存 ~1.4MB；启动后台线程生成，二次启动读缓存秒开。
+
+**延迟**：Windows WASAPI 共享模式，Godot 默认输出延迟 ~15ms（人类"边弹边听"可接受阈值内，与入门 MIDI 接口相当）；工程保留 `audio/driver/output_latency` 调优口。
+
+## 5. 渲染性能设计
+
+- 钢琴卷帘/键盘全部为**单个 Control 的 `_draw()` 矢量绘制**，不用每音符一个节点 → 千级音符也只走一个 canvas item。
+- 脏标记：只在模型变化、滚动/缩放、播放推进时 `queue_redraw()`；静止时零重绘。
+- 绘制前按可视区间**裁剪**（音符、网格线都只画视口内的）。
+- 播放推进的 playhead 重绘频率 = 帧率，但绘制范围被裁剪后单帧成本 O(可见音符数)。
+
+## 6. 存储与空间优化
+
+- 工程文件 `.bsong`：`FileAccess.open_compressed(ZSTD)` 二进制，音符按 `PackedInt32Array` 平铺 `[pitch,start,len,vel]×n` → 千音符工程 **< 10KB**（对比 JSON 数百 KB）。
+- 采样缓存 `user://sample_cache_v2.bin`：ZSTD 压缩合成波形（正弦类压缩率 ~40-50%），二次启动免合成。
+- 无外部音频文件：4 音色全合成，**安装包音频体积 = 0**；美术仅 3 张小 PNG（logo/图标/应用图标，共 < 10KB）。
+- 导出 WAV（16bit 44.1k）供游戏引擎直接使用；未来可加 OGG 导出。
+
+## 7. 语言选型分析：GDScript + gode/TypeScript 混合开发（v0.1 实际采用）
+
+| 方案 | 结论 | 理由 |
+|---|---|---|
+| **GDScript（主体）** | ✅ UI / 音频 / 数据全量使用 | 性能瓶颈（音频）已用"预渲染采样"架构消解，播放期无热循环；UI/编舞逻辑 GDScript 足够；无导出依赖，迭代最快 |
+| **gode / TypeScript（混合层，已接入）** | ✅ 乐理引擎 | 经调研 [gode 2.4.4](https://github.com/godothub/gode)（[文档](https://godothub.com/oss/gode)）：Godot 官方脚本体系内的 JS/TS 语言插件（GDExtension 实现，自带 Node 运行时，无需安装 Node.js）。TS 脚本可与 GDScript 双向互操作、可做 autoload。分工：**纯计算、重数据变换的乐理模块（音阶/和弦/音名）用 TS**（未来可直接接入 npm 音乐理论生态），UI 与音频实时路径保持 GDScript |
+| C# | ❌ 不用 | 引入 .NET 运行时体积（安装包 +100MB 级），与"存储优化"目标冲突；已有 gode 覆盖混合语言需求 |
+| GDExtension 自研 (C++) | ⏸ 预留 | 触发条件：① 需要 SF2/SFZ 实时解码合成音源；② 低延迟效果器链。届时只替换 InstrumentBank/Synth 内核，接口不变 |
+
+**混合语言架构（带优雅降级）**：
+
+```
+调用方（main_ui 等）
+   │ Theory.scale_chord(...)
+   ▼
+theory_engine.gd（门面 autoload）
+   ├─ 检测 addons/gode 存在 且 load("res://scripts/theory.ts") 成功
+   │    → 实例化 TypeScriptScript（set_script 方式），后端 = gode-typescript
+   └─ 否则 → 回退 NoteKeys.gd 同逻辑实现，后端 = gdscript
+（两后端行为一致，调用方无感知；插件缺失/损坏不影响运行）
+```
+
+**gode 注意事项**（实测踩坑）：
+- 从 GitHub Releases 下载 `gode.zip`（224MB 压缩 / 全平台解压 711MB）。按"存储优化"原则只解压 `binary/windows`，其余平台二进制按需补充；实际安装后约 131MB。
+- 插件启用需重启编辑器（TS 编译服务随编辑器插件加载；游戏运行时 GDExtension 独立生效）。
+- `TypeScriptScript` 资源**不支持 `.new()`**，须用 `Node.new()` + `set_script(ts_script)` 实例化。
+- gode 启用后会自动注册 `EventLoop` autoload 与 `[native_extensions]` 配置，勿手动删除。
+
+**插件策略**：引擎原生 API 全覆盖 UI/音频；混合语言用 gode；未来音源升级优先评估 [Clef Midi](https://store.godotengine.org/asset/star-weaver/clef-midi/)（SF2 合成）而非自研 GDExtension。
+
+### 7.5 godothub 生态插件分工（2026-09-10 评估）
+
+| 插件 | 定位 | 分工决策 |
+|---|---|---|
+| [Gode](https://github.com/godothub/gode) | Godot 的 JS/TS 语言支持 | ✅ **已接入**：TS 乐理引擎（§7），GDScript 缺失自动回退 |
+| [Godot-ECS](https://github.com/godothub/godot-ecs) | 纯 GDScript ECS：直通/并行双模式、DAG 依赖调度、带版本迁移的序列化 | ⏸ **v0.2 引入**：v0.2 的鼓机步进轨 + 多轨并行事件调度用其 scheduled 模式；序列化系统用于工程版本迁移。v0.1 音符量 <2k，线性事件表更简单，强行 ECS 反而增加间接层 |
+| [Compute-Flow](https://github.com/godothub/compute-flow) | GPU 计算着色器可视化编排（AudioBuffer 节点可对接音频播放器） | ⏸ **v0.3 评估**：实时 DSP 效果器（混响/均衡/压缩）的候选实现路径；要求 Vulkan 后端，需将本项目从 D3D12 切换并验证兼容性后再定 |
+| [Gmui](https://github.com/godothub/gmui) | MVVM UI 框架（.gmui 标记文件 + g-model 双向绑定） | ⏸ **局部预留**：适合"设置页/新手引导/关于页"等表单型页面；主工作区是 60fps 走带同步的自绘卷帘/键盘，数据绑定不匹配，保持代码构建 |
+| [Konado](https://github.com/godothub/konado) | 视觉小说对话框架 | ❌ **不适用**：纯音乐工具无对话/剧情/立绘需求 |
+
+> 分工原则：插件服务于"下一个版本的真实需求"才引入；每个引入都要有退出成本评估（本作对安装包体积敏感）。
+
+## 8. 美术管线（Aseprite）
+
+`aseprite/*.aseprite`（源文件）→ MCP 导出 → `assets/sprites/*.png`：
+- `logo.png` 64×64 像素钢琴图标（标题栏 + 关于）
+- `icons.png` 6×16×16 图集：播放/停止/录制/保存/打开/导出（工具栏，TextureRegion 切片）
+- `icon64.png` 应用图标（替换 Godot 默认 icon.svg）
+
+像素画全部 1x 绘制、UI 中 `TEXTURE_FILTER_NEAREST` 保持锐利。
+
+## 9. 项目结构
+
+```
+res://
+├── DESIGN.md              # 本文档
+├── scenes/main.tscn       # 唯一场景（UI 由 main_ui.gd 代码构建，便于迭代）
+├── scripts/
+│   ├── instrument_bank.gd # 自动加载：音色合成/缓存
+│   ├── synth_engine.gd    # 自动加载：播放器池/总线
+│   ├── song_model.gd      # class_name SongModel：数据模型+序列化
+│   ├── note_keys.gd       # class_name NoteKeys：键位表/音名/音阶（含 GDScript 乐理回退）
+│   ├── theory_engine.gd   # 自动加载 Theory：乐理门面（TS 优先/回退）
+│   ├── theory.ts          # gode/TypeScript 乐理引擎实现
+│   ├── transport.gd       # class_name Transport：走带/调度/录制时钟
+│   └── ui/
+│       ├── main_ui.gd     # 根界面：布局/模式/文件/录制路由
+│       ├── piano_keyboard.gd # 演奏大键盘
+│       └── piano_roll.gd  # 钢琴卷帘
+├── assets/sprites/        # Aseprite 导出产物（logo/icons 图集/应用图标）
+├── aseprite/              # Aseprite 源文件
+└── addons/gode/           # gode 2.4.4（仅保留 Windows 二进制，131MB）
+```
+
+## 10. 路线图
+
+- **v0.1（本版，已实现并通过自检）**：演奏模式 / 双轨钢琴卷帘 / 录制量化 / 4 音色 / bsong 存取 / WAV 导出 / 示范曲 / gode TS 乐理引擎
+- **v0.2**：撤销重做、drum 轨（鼓机步进）、MIDI 文件导入导出、循环区间、更多音色、自动和声（旋律→ chords 建议）
+- **v0.3**：SF2/SFZ 采样音源（评估 Clef Midi 或 GDExtension）、复音数上限策略、工程模板
+
+## 11. v0.1 验证记录（2026-09-10，Godot 4.7.2 stable 实测）
+
+| 项 | 结果 |
+|---|---|
+| 启动 | 无报错；音源缓存命中时秒开（`[InstrumentBank] 缓存加载完成`） |
+| 乐理引擎后端 | `gode-typescript` 生效；缺失插件时自动回退 `gdscript`（已验证两条路径） |
+| TS 互操作 | `Theory.scale_chord(60, C大调)=[60,64,67]`、`(64)=[64,67,71]`（TS 计算，GDScript 调用） |
+| 走带精度 | 96 BPM 播放 2.5s → playhead=16.0 tick（恰 1 小节），音符触发 11 个 ✓ |
+| 存档往返 | 2 轨 78 音符（旋律42+伴奏36）保存→读档逐项一致；**.bsong 仅 308 字节** |
+| 双页渲染 | 截图目检：演奏页全宽键盘+键帽字母；编曲页卷帘渲染示范曲（含幽灵音符/标尺/播放头） |
+| 资产 | Aseprite 源文件 3 个（logo/icon64/icons 图集）→ PNG 导入并生效（标题栏/按钮图标可见） |
+| 窗口关闭自动保存 | 关窗 → user://autosave.bsong → 下次启动恢复（实测生效） |
+
+自检中发现并修复的问题（留档）：白键序号八度偏移公式、`Control.scale` 成员名冲突、`TypeScriptScript` 不支持 `.new()`、.bsong 读档漏读版本号 2 字节导致字段错位、和弦音域收集过窄。
+
+## 12. v0.1.1 界面升级（2026-09-10，依据 DAW 布局设计调研）
+
+**钢琴键盘 v2（层次感/按压动画/比例修正）**：
+- 真钢琴长宽比（白键宽 ≤58px、键盘块高≈宽÷5.8）并在控件内**水平+垂直居中**，不再拉伸撑满整窗
+- 立体结构：上盖板（印 C4/C5/C6 八度标注）→ 白键区（三段渐变键面 + 左高光/右暗缘 + 前缘）→ 前条；黑键带**投影**、左受光面/右暗面/顶部亮面 + 描边
+- **按压动画**：键面下沉（白键下沉 4px 露出铰链阴影槽 + 蓝色渐变染色；黑键下沉 3px + 底部发光条），指数平滑 ~100ms，静止后停止 `_process`（脏驱动不空转）
+- 电脑键盘/鼠标弹奏均走同一动画路径
+
+**操作界面（布局清晰/交互易懂）**：
+- 工具栏改为 **FL Studio 式功能分组面板**：走带 / 速度 / 辅助 / 编辑 / 轨道 / 文件，每组小标题 + 圆角底色，一眼定位功能区域
+- 全部控件加中文 tooltip（悬停即得说明）；新增 **空格 = 播放/停止** 快捷键
+- 卷帘新增 **跟随播放头**（播放时自动滚动，可关）
+- 布局设计依据：DAW 惯例（卷帘=左侧键盘列+网格、工具栏按功能分组、自动滚动类开关常驻可见），参考 [Ableton Arrangement View 手册](https://www.ableton.com/en/manual/arrangement-view/)、[FL Studio 工具栏文档](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/toolbar_panels.htm)、[音乐界面设计原则](https://medium.com/swlh/designing-musical-user-interfaces-4f30b41d7a83)（声音本身是反馈闭环的一部分：按下即发声+视觉反馈）
+
+## 13. v0.1.2 演奏/编曲体验升级（2026-09-10）
+
+**Bug 修复**：
+- 编曲单击音符长度 4 → **1 tick**（默认单个 1/16 块；长度仍可在工具栏 1–16 调整）
+- **"点播放没声音"**：根因是上一次播放自然结束后播放头停在曲末，再点播放从曲末瞬间越界停止。修复：播放时若 playhead ≥ 曲末自动回卷到 0（回归测试通过）
+
+**演奏页 — 音符记录回声条（NoteRain）**：
+- 参考 Synthesia / SeeMusic / [ekkx/notefall](https://github.com/ekkx/notefall) 的"音符雨+命中反馈"惯例；本作横置琴键 → 演化为**上升回声**：按住越长色块越高，松手整体上浮渐隐（1.5s），底部命中线随按压发光
+- 色块横向精确对位琴键（白键全宽/黑键 0.58 窄块，含偏移微调），颜色跟随当前轨色
+- 键盘新增**悬停微亮**动效；白键宽上限 58→64px、长宽比 5.8→6.2（占比更接近真钢琴视觉）
+
+**编曲页 — 缩放**：
+- 工具栏 `− / 100% / +` 控件（基准 100% = 10px/tick，范围 3–48），围绕视口中心缩放；快捷键 `=` / `-`；Ctrl+滚轮以光标为锚缩放保留
+- 播放头自动跟随（可关）上一版已加
+
+**图标 v2（Aseprite 重绘，风格不变加边框与层次）**：
+- 按钮图集 16px → **32×32@2x**：1px 深色描边 + 上亮下暗双色 + 柱顶高光；运行时 `icon_max_width=20` 显示（HiDPI 下仍清晰）
+- 应用图标重绘：圆角底板 + 边框 + 内顶高光 + 三段立体白键 + 描边双色音符
+
+**Godot 分辨率/自适应（调研结论落地）**：
+- 本作已有的 `stretch=canvas_items + aspect=expand` 即[官方文档](https://docs.godotengine.org/en/stable/tutorials/rendering/multiple_resolutions.html)推荐组合：原生分辨率渲染保证文字/矢量 UI 在 HiDPI 清晰，多余空间交给锚点布局
+- `allow_hidpi`（4.x 默认开）+ 自绘控件全部按 `size` 动态布局（键盘/回声条/卷帘随窗口缩放重排）；位图图标走 2x 素材缩小显示抗模糊；参考 [Chickensoft 桌面缩放实践](https://chickensoft.games/blog/display-scaling)
+
+**性能/内存/存储/导入现状**：低处理器模式 + 脏重绘（键盘动画、回声条、卷帘均无音符时停止 `_process`）；回声条块自动回收；采样 zstd 磁盘缓存（二次启动免合成）；.bsong zstd（78 音符 308 字节）；PNG 走 Godot 默认无损压缩导入；32 复音池零运行时节点分配。
