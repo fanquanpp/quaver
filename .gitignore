@@ -1,21 +1,29 @@
-# Godot 4+ specific ignores
+# ── Godot 引擎 ──────────────────────────────────────────────
+# 导入缓存（自动重建）
 .godot/
+.import/
+# Android 导出模板生成目录
 /android/
+# 本地化构建产物
+*.translation
 
-# gode 运行时（体积原因不入库；安装步骤见 README「可选：TypeScript 乐理后端」）
+# ── gode 插件（体积原因不入库；安装步骤见 README「可选：TypeScript 乐理后端」）──
 /addons/gode/
+# gode TypeScript 编译缓存
+/.gode/
 
-# 导出产物（export_presets.cfg 入库，保证发布可复现）
+# ── 构建产物（export_presets.cfg 已入库，保证发布可复现）────────
+/build/
 /export/
 *.pck
 *.exe
+*.zip
 
-# 系统 / IDE
+# ── 系统 / IDE ─────────────────────────────────────────────
 Thumbs.db
 .DS_Store
 .idea/
 .vscode/
-
-# gode 编译缓存
-/.gode/
-/build/
+*.swp
+*.bak
+*.tmp
