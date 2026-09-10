@@ -6,7 +6,9 @@ extends RefCounted
 ## 导入按文件自己的 division 换算并四舍五入回 1/16 网格。
 ## 导出：格式 1，轨 0 = 速度/拍号元信息，其后每工程轨一个 MIDI 轨（轨名 + 程序变更）。
 ## 导入：格式 0/1 均可；按 (轨, 通道) 分组还原为工程轨，GM 程序号启发式映射回本软件音色，
-##       通道 10（打击乐）也保留（映射到「芯片」，丢音符不如先存下来）。
+##       通道 10（打击乐）也保留（默认「芯片」，可用 user://gm_map.json 映射为「鼓组」等）。
+## 自定义映射：user://gm_map.json = {"chan9": "鼓组", "programs": {"0": "贝斯"}}，
+##       打击乐通道优先于程序号映射，非法音色值自动回退内置启发式。
 
 const PPQ := 480
 const TICKS_PER_QUANTA := 30  # PPQ / 16分音符数每四分音符
@@ -289,7 +291,8 @@ static func _load_gm_map() -> Dictionary:
 
 
 static func _inst_valid(inst: String) -> bool:
-	return inst == InstrumentBank.DRUM_INST or inst in InstrumentBank.INSTRUMENTS
+	return inst == InstrumentBank.DRUM_INST \
+			or inst in InstrumentBank.INSTRUMENTS or inst in InstrumentBank.instruments
 
 
 static func _u16(d: PackedByteArray, i: int) -> int:

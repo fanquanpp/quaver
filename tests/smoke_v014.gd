@@ -22,6 +22,8 @@ func _run() -> void:
 	_test_sheet_music_split()
 	await _test_new_instruments()
 	_test_synth_grab()
+	_test_analysis_stats()
+	await _test_ui_playback()
 	await _test_ui_wiring()
 
 	if _fails.is_empty():
@@ -159,6 +161,43 @@ func _test_transport_no_loop_stops_at_end() -> void:
 	_check(not t.playing, "非循环播放应自然停止")
 	_check(t.playhead >= s.song_end_tick(), "停止时播放头应到曲末（%.1f vs %d）"
 			% [t.playhead, s.song_end_tick()])
+
+
+## ── 分析引擎统计（自 v013 套件合并） ───────────────────────────────
+
+func _test_analysis_stats() -> void:
+	var a := SongAnalysis.analyze(SongModel.make_demo())
+	_check(a["note_count"] == 78, "示范曲应 78 音符（实际 %d）" % a["note_count"])
+	_check(a["key"]["root"] == 0 and not a["key"]["minor"], "调性检测应 C 大调")
+	_check(a["max_poly"] >= 3, "最大同时音应 ≥3")
+	_check(a["dur_secs"] > 0.0, "曲长应 > 0")
+
+
+## ── 主界面端到端播放（自 v013 套件合并） ───────────────────────────
+
+func _test_ui_playback() -> void:
+	var ps: PackedScene = load("res://scenes/main.tscn")
+	var ui: Control = ps.instantiate()
+	add_child(ui)
+	for i in 5:
+		await get_tree().process_frame
+	var counter := [0]
+	ui.transport.note_fired.connect(func(_t: int, _p: int, _v: float) -> void:
+		counter[0] += 1)
+	# 播放内容用 demo 工程，不依赖本机 autosave 恢复出的工程（可能为空）
+	ui._switch_song(SongModel.make_demo())
+	ui._on_play()
+	for i in 30:
+		await get_tree().process_frame
+	var any_playing := false
+	for p in Synth._players:
+		if p.playing:
+			any_playing = true
+			break
+	_check(counter[0] > 0, "端到端播放：note_fired 未触发（走带/连接断了）")
+	_check(any_playing, "端到端播放：无任何播放器在发声（Synth 路由断了）")
+	ui.transport.stop()
+	ui.queue_free()
 
 
 ## ── 5) MusicXML 乐谱导出 ───────────────────────────────────────────
