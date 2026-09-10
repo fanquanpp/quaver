@@ -36,6 +36,8 @@ func _run() -> void:
 	var counter := [0]
 	ui.transport.note_fired.connect(func(_t: int, _p: int, _v: float) -> void:
 		counter[0] += 1)
+	# 播放内容用 demo 工程，不依赖本机 autosave 恢复出的工程（可能为空）
+	ui._switch_song(SongModel.make_demo())
 	ui._on_play()
 	for i in 30:
 		await get_tree().process_frame

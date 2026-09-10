@@ -58,6 +58,14 @@ static func in_scale(midi: int, key_root: int, scale: Array) -> bool:
 	return (midi - key_root) % 12 in scale
 
 
+## 指定调式一个八度内的音级列表（GDScript 回退实现，对应 TS scaleNotes）
+static func scale_notes(key_root: int, scale: Array) -> Array:
+	var out: Array = []
+	for s in scale:
+		out.append(key_root + int(s))
+	return out
+
+
 ## 以 midi 为音级根音的调内三和弦（新手"和弦模式"核心）
 ## GDScript 回退实现；优先走 gode 的 TypeScript 版本（见 theory_engine.gd）
 static func scale_chord(midi: int, key_root: int, scale: Array) -> Array:

@@ -14,6 +14,8 @@ var song: SongModel
 var playing := false
 var recording := false
 var loop_play := false
+var loop_start := 0.0   ## 循环区间起点（tick）
+var loop_end := 0.0     ## 循环区间终点（tick）；0 = 跟随曲末（整体循环）
 var playhead := 0.0
 
 var _events: Array = []  # {t:float, tr:int, p:int, v:float} 按 t 升序
@@ -24,16 +26,25 @@ func _process(delta: float) -> void:
 	if not playing:
 		return
 	playhead += delta / song.secs_per_tick()
-	var end := float(maxi(song.song_end_tick() + 8, 32))
+	# 循环时终点取区间（区间未设置则曲末）；非循环永远停在曲末
+	var end := _loop_end_tick() if loop_play else float(maxi(song.song_end_tick() + 8, 32))
 	if playhead >= end:
 		if loop_play:
-			playhead = fmod(playhead, end)
+			var span := maxf(end - loop_start, 1.0)
+			playhead = loop_start + fmod(playhead - loop_start, span)
 			_sync_ptr()
 		else:
 			stop()
 			return
 	_fire_due()
 	tick_changed.emit(playhead)
+
+
+## 循环边界：loop_end <= 0 时跟随曲末（保留旧"曲末 +8 tick 缓冲"行为）
+func _loop_end_tick() -> float:
+	if loop_end > 0.0:
+		return loop_end
+	return float(maxi(song.song_end_tick() + 8, 32))
 
 
 func play(from_tick := -1.0) -> void:

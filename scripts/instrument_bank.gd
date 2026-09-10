@@ -8,10 +8,10 @@ extends Node
 signal bank_ready
 
 const SR := 22050
-const CACHE_VERSION := 2
+const CACHE_VERSION := 3
 const CACHE_PATH := "user://sample_cache_v%d.bin"
 const BASE_NOTES := [36, 48, 60, 72]  # C2 C3 C4 C5
-const INSTRUMENTS := ["钢琴", "芯片", "柔弦", "贝斯"]
+const INSTRUMENTS := ["钢琴", "芯片", "柔弦", "贝斯", "电钢", "八音盒"]
 
 var ready_ok := false
 
@@ -74,6 +74,8 @@ func _make_stream(inst: String, midi: int) -> AudioStreamWAV:
 		"芯片": buf = _synth_chip(NoteKeys.midi_to_freq(midi))
 		"柔弦": buf = _synth_pad(NoteKeys.midi_to_freq(midi))
 		"贝斯": buf = _synth_bass(NoteKeys.midi_to_freq(midi))
+		"电钢": buf = _synth_epiano(NoteKeys.midi_to_freq(midi))
+		"八音盒": buf = _synth_musicbox(NoteKeys.midi_to_freq(midi))
 	var n := buf.size()
 	var data := PackedByteArray()
 	data.resize(n * 2)
@@ -191,6 +193,54 @@ func _synth_bass(freq: float) -> PackedFloat32Array:
 		if i < attack_n:
 			v *= float(i) / attack_n
 		buf[i] = v
+	return _normalize(buf)
+
+
+## 电钢（Rhodes 风）：基频正弦主体 + ×3 泛音"叮"头 + 轻微敲击瞬态
+func _synth_epiano(freq: float) -> PackedFloat32Array:
+	var dur := 2.8
+	var n := int(dur * SR)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var w1 := TAU * freq / float(SR)
+	var w3 := TAU * freq * 3.0 / float(SR)
+	var attack_n := maxi(int(0.003 * SR), 1)
+	var p1 := 0.0
+	var p3 := 0.9
+	for i in n:
+		var t := float(i)
+		p1 += w1
+		p3 += w3
+		var body := sin(p1) * exp(-1.6 * t / SR)
+		var bell := sin(p3) * exp(-16.0 * t / SR) * 0.30
+		var v := body + bell
+		if i < attack_n:
+			v *= float(i) / attack_n
+		buf[i] = v * 0.75
+	return _normalize(buf)
+
+
+## 八音盒：亮正弦 + 二/三次泛音，极快衰减（金属拨片质感）
+func _synth_musicbox(freq: float) -> PackedFloat32Array:
+	var dur := 1.8
+	var n := int(dur * SR)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var w := TAU * freq / float(SR)
+	var attack_n := maxi(int(0.0015 * SR), 1)
+	var phases := [0.0, 2.1, 0.4]
+	var mults := [1.0, 2.0, 3.02]
+	var amps := [1.0, 0.35, 0.12]
+	var decays := [2.8, 4.2, 6.5]
+	for i in n:
+		var t := float(i)
+		var v := 0.0
+		for h in 3:
+			phases[h] += w * mults[h]
+			v += sin(phases[h]) * amps[h] * exp(-decays[h] * t / SR)
+		if i < attack_n:
+			v *= float(i) / attack_n
+		buf[i] = v * 0.7
 	return _normalize(buf)
 
 

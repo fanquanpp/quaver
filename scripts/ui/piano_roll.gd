@@ -39,6 +39,7 @@ var scroll_x := 0.0
 var scroll_y := 0.0
 
 var _drag := -1          # -1无 0新建 1移动 2改长 3删除
+var _drag_dirty := false # 本次拖拽是否真的改动了数据（无效拖拽不进撤销栈）
 var _temp := {}          # 新建中的音符 {p,s,l}
 var _drag_orig := {}
 var _drag_ref_tick := 0.0
@@ -155,6 +156,7 @@ func _mouse_button(mb: InputEventMouseButton) -> void:
 			_release_left()
 	elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
 		_drag = 3
+		_drag_dirty = false
 		_delete_at(mb.position)
 	elif mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 		var step := -64.0 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 64.0
@@ -170,6 +172,7 @@ func _mouse_button(mb: InputEventMouseButton) -> void:
 
 
 func _press_left(pos: Vector2) -> void:
+	_drag_dirty = false
 	if pos.y < MARGIN_T:  # 标尺：跳播
 		if transport != null:
 			transport.seek(maxf(0.0, _tick_at(pos.x)))
@@ -209,9 +212,11 @@ func _release_left() -> void:
 		_temp = {}
 		note_edited.emit()
 	elif _drag == 1 or _drag == 2:
-		note_edited.emit()
+		if _drag_dirty:
+			note_edited.emit()
 	elif _drag == 3:
-		note_edited.emit()
+		if _drag_dirty:
+			note_edited.emit()
 	_drag = -1
 	queue_redraw()
 
@@ -240,6 +245,7 @@ func _mouse_motion(pos_m: InputEventMouseMotion) -> void:
 			if np != note["p"] or ns != note["s"]:
 				note["p"] = np
 				note["s"] = ns
+				_drag_dirty = true
 				audition.emit(np)
 				queue_redraw()
 		2:
@@ -249,6 +255,7 @@ func _mouse_motion(pos_m: InputEventMouseMotion) -> void:
 			var nl: int = maxi(_snapped(tick_f) - note2["s"], maxi(snap, 1))
 			if nl != note2["l"]:
 				note2["l"] = nl
+				_drag_dirty = true
 				queue_redraw()
 		3:
 			_delete_at(pos)
@@ -262,8 +269,16 @@ func _delete_at(pos: Vector2) -> void:
 	var n := song.note_at(track_idx, pitch, tick)
 	if not n.is_empty():
 		song.remove_note(track_idx, n)
+		_drag_dirty = true
 		_hover = {}
 		queue_redraw()
+
+
+## 撤销/换轨后清拖拽状态（原引用已随快照还原失效）
+func clear_drag_state() -> void:
+	_drag = -1
+	_hover = {}
+	_temp = {}
 
 
 ## 设置横向缩放（px/tick），围绕指定 tick（默认视口中心）缩放
@@ -315,6 +330,22 @@ func _draw() -> void:
 	for b in range(int(t0 / bar), int(t1 / bar) + 1):
 		var xb := floorf(_x_of_tick(b * bar)) + 0.5
 		draw_line(Vector2(xb, MARGIN_T), Vector2(xb, h), C["gridbar"], 1.0)
+
+	# 2.5 循环区间着色 + 边界线（走带开着循环时显示）
+	if transport != null and transport.loop_play:
+		var ls: float = transport.loop_start
+		var le: float = transport.loop_end if transport.loop_end > 0.0 else float(song.song_end_tick())
+		if le > ls:
+			var lx0 := maxf(_x_of_tick(ls), MARGIN_L)
+			var lx1 := minf(_x_of_tick(le), w)
+			if lx1 > lx0:
+				draw_rect(Rect2(lx0, MARGIN_T, lx1 - lx0, h - MARGIN_T),
+						Color(0.35, 0.6, 1.0, 0.045))
+				draw_rect(Rect2(lx0, 0, lx1 - lx0, MARGIN_T), Color(0.35, 0.6, 1.0, 0.18))
+				for xl in [lx0, lx1]:
+					if xl >= MARGIN_L and xl <= w:
+						draw_line(Vector2(floorf(xl) + 0.5, MARGIN_T),
+								Vector2(floorf(xl) + 0.5, h), Color(0.45, 0.65, 1.0, 0.55), 1.0)
 
 	# 3. 幽灵音符（其他轨，半透明）
 	for trk in song.tracks.size():

@@ -43,3 +43,15 @@ func note_name(midi: int) -> String:
 	if _use_ts("note_name"):
 		return _ts.call("note_name", midi)
 	return NoteKeys.note_name(midi)
+
+
+func scale_notes(key_root: int, scale: Array) -> Array:
+	if _use_ts("scale_notes"):
+		return _ts.call("scale_notes", key_root, scale)
+	return NoteKeys.scale_notes(key_root, scale)
+
+
+func midi_to_freq(midi: float) -> float:
+	if _use_ts("midi_to_freq"):
+		return _ts.call("midi_to_freq", midi)
+	return NoteKeys.midi_to_freq(midi)

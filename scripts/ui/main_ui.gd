@@ -22,6 +22,7 @@ const COL_TEXT_DIM := Color("8f97a6")
 
 var song: SongModel
 var transport: Transport
+var history: EditHistory
 
 var keyboard: PianoKeyboard
 var mini_kb: PianoKeyboard   # 编曲页底部迷你键盘（VSplit 可调区域）
@@ -39,6 +40,8 @@ var _play_btn: Button
 var _stop_btn: Button
 var _rec_btn: Button
 var _loop_chk: CheckButton
+var _loop_a: SpinBox
+var _loop_b: SpinBox
 var _follow_chk: CheckButton
 var _rain: NoteRain
 var _zoom_lab: Label
@@ -58,6 +61,8 @@ var _kb_scale: HSlider
 var _kb_span: OptionButton
 var _track_btns: Array[Button] = []
 var _inst_opt: OptionButton
+var _undo_btn: Button
+var _redo_btn: Button
 var _export_btn: Button
 
 var _hbar: HScrollBar
@@ -66,6 +71,9 @@ var _vbar: VScrollBar
 var _save_dlg: FileDialog
 var _open_dlg: FileDialog
 var _wav_dlg: FileDialog
+var _midi_dlg: FileDialog
+var _midi_save_dlg: FileDialog
+var _score_dlg: FileDialog
 var _rec_effect: AudioEffectRecord
 var _exporting := false
 
@@ -75,6 +83,8 @@ var _icons_tex: Texture2D
 func _ready() -> void:
 	get_tree().auto_accept_quit = false
 	_load_or_demo()
+	history = EditHistory.new()
+	history.reset(song)
 	transport = Transport.new()
 	transport.song = song
 	add_child(transport)
@@ -85,7 +95,10 @@ func _ready() -> void:
 	_build_ui()
 	_apply_scale_helper()
 	_refresh_track_ui()
+	_sync_loop_range_ui()
 	_update_status()
+	history.history_changed.connect(_update_edit_buttons)
+	_update_edit_buttons(history.can_undo(), history.can_redo())
 	InstrumentBank.bank_ready.connect(_update_status)
 
 
@@ -115,6 +128,8 @@ func _switch_song(new_song: SongModel) -> void:
 	transport.song = song
 	roll.song = song
 	roll.scroll_to_start()
+	roll.clear_drag_state()
+	history.reset(song)
 	if analysis != null:
 		analysis.song = song
 		analysis.refresh()
@@ -122,6 +137,7 @@ func _switch_song(new_song: SongModel) -> void:
 	_sel_track = clampi(_sel_track, 0, song.tracks.size() - 1)
 	roll.track_idx = _sel_track
 	_refresh_track_ui()
+	_sync_loop_range_ui()
 	transport.seek(0.0)
 
 
@@ -205,7 +221,25 @@ func _build_header() -> Control:
 	_rec_btn.toggle_mode = true
 	_rec_btn.tooltip_text = "录制：弹奏自动量化记入当前轨"
 	_loop_chk = _mk_check("循环", false, _on_loop_toggle)
-	_loop_chk.tooltip_text = "到达曲末自动从头循环"
+	_loop_chk.tooltip_text = "在循环区间内打转（区间=后面两个小节号，默认整曲）"
+	_loop_a = SpinBox.new()
+	_loop_a.min_value = 1
+	_loop_a.max_value = 512
+	_loop_a.step = 1
+	_loop_a.value = 1
+	_loop_a.suffix = "小节"
+	_loop_a.custom_minimum_size = Vector2(86, 0)
+	_loop_a.value_changed.connect(_on_loop_range_changed)
+	_loop_a.tooltip_text = "循环区间起点（小节）"
+	_loop_b = SpinBox.new()
+	_loop_b.min_value = 1
+	_loop_b.max_value = 512
+	_loop_b.step = 1
+	_loop_b.value = 16
+	_loop_b.suffix = "小节"
+	_loop_b.custom_minimum_size = Vector2(86, 0)
+	_loop_b.value_changed.connect(_on_loop_range_changed)
+	_loop_b.tooltip_text = "循环区间终点（小节）"
 
 	_vol_slider = HSlider.new()
 	_vol_slider.min_value = 0.0
@@ -225,6 +259,7 @@ func _build_header() -> Control:
 	_bpm_spin.custom_minimum_size = Vector2(70, 0)
 	_bpm_spin.value_changed.connect(func(v: float) -> void:
 		song.bpm = v
+		history.mark_dirty()
 		if analysis != null:
 			analysis.refresh())
 	_bpm_spin.tooltip_text = "速度（拍/分钟）"
@@ -232,17 +267,13 @@ func _build_header() -> Control:
 	_pos_label = _mk_label("第 1 小节")
 	_pos_label.custom_minimum_size = Vector2(84, 0)
 
-	hb.add_child(_group("走带", [_play_btn, _stop_btn, _rec_btn, _loop_chk, _vol_slider]))
-	hb.add_child(_group("速度", [_bpm_spin, _pos_label]))
-
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hb.add_child(spacer)
-
 	_status_label = _mk_label("音源载入中…")
 	_status_label.add_theme_font_size_override("font_size", 12)
 	_status_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_status_label.custom_minimum_size = Vector2(150, 0)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hb.add_child(spacer)
 	hb.add_child(_status_label)
 	var pad := Control.new()
 	pad.custom_minimum_size = Vector2(8, 0)
@@ -322,29 +353,38 @@ func _build_theme() -> Theme:
 
 
 func _build_options() -> Control:
-	var hb := HBoxContainer.new()
-	hb.add_theme_constant_override("separation", 8)
+	# HFlowContainer：窗口宽度不够时功能组自动换行，任何窗口尺寸都不裁切控件
+	var flow := HFlowContainer.new()
+	flow.add_theme_constant_override("h_separation", 8)
+	flow.add_theme_constant_override("v_separation", 4)
 
-	_scale_chk = _mk_check("启用", false, _on_scale_changed)
+	flow.add_child(_group("走带", [_play_btn, _stop_btn, _rec_btn, _loop_chk, _loop_a, _loop_b, _vol_slider]))
+	flow.add_child(_group("速度", [_bpm_spin, _pos_label]))
+
+	_scale_chk = _mk_check("启用", false, _on_scale_toggled)
 	_scale_chk.tooltip_text = "调性辅助：调外键变暗，新手不易弹错"
 	_key_opt = OptionButton.new()
 	for k in ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]:
 		_key_opt.add_item(k)
 	_key_opt.focus_mode = Control.FOCUS_NONE
 	_key_opt.tooltip_text = "调（主音）"
-	_key_opt.item_selected.connect(func(_i: int) -> void: _on_scale_changed(true))
+	_key_opt.item_selected.connect(func(_i: int) -> void: _on_scale_picked())
 	_mode_opt = OptionButton.new()
 	for s in NoteKeys.SCALES:
 		_mode_opt.add_item(s)
 	_mode_opt.focus_mode = Control.FOCUS_NONE
 	_mode_opt.tooltip_text = "音阶"
-	_mode_opt.item_selected.connect(func(_i: int) -> void: _on_scale_changed(true))
+	_mode_opt.item_selected.connect(func(_i: int) -> void: _on_scale_picked())
 	_chord_chk = _mk_check("和弦", false, func(on: bool) -> void: _chord_mode = on)
 	_chord_chk.tooltip_text = "和弦模式：按一个键自动补齐调内三和弦"
 	_labels_chk = _mk_check("键帽", true, _on_labels_toggled)
 	_labels_chk.tooltip_text = "在琴键上显示电脑键帽字母"
-	hb.add_child(_group("辅助", [_scale_chk, _key_opt, _mode_opt, _chord_chk, _labels_chk]))
+	flow.add_child(_group("辅助", [_scale_chk, _key_opt, _mode_opt, _chord_chk, _labels_chk]))
 
+	_undo_btn = _mk_button("撤销", _do_undo)
+	_undo_btn.tooltip_text = "撤销（快捷键 Ctrl+Z）"
+	_redo_btn = _mk_button("重做", _do_redo)
+	_redo_btn.tooltip_text = "重做（快捷键 Ctrl+Y 或 Ctrl+Shift+Z）"
 	_snap_opt = OptionButton.new()
 	for s in ["1/16", "1/8", "1/4", "1/2", "1小节", "关"]:
 		_snap_opt.add_item(s)
@@ -367,7 +407,7 @@ func _build_options() -> Control:
 	_zoom_lab.custom_minimum_size = Vector2(44, 0)
 	var zoom_in := _mk_button("+", _on_zoom_in)
 	zoom_in.tooltip_text = "放大（快捷键 =）"
-	hb.add_child(_group("编辑", [_snap_opt, _len_spin, _follow_chk, zoom_out, _zoom_lab, zoom_in]))
+	flow.add_child(_group("编辑", [_undo_btn, _redo_btn, _snap_opt, _len_spin, _follow_chk, zoom_out, _zoom_lab, zoom_in]))
 
 	for i in 2:
 		var tb := Button.new()
@@ -383,18 +423,24 @@ func _build_options() -> Control:
 	_inst_opt.focus_mode = Control.FOCUS_NONE
 	_inst_opt.item_selected.connect(_on_inst_changed)
 	_inst_opt.tooltip_text = "当前轨的音色"
-	hb.add_child(_group("轨道", [_track_btns[0], _track_btns[1], _inst_opt]))
+	flow.add_child(_group("轨道", [_track_btns[0], _track_btns[1], _inst_opt]))
 
 	_export_btn = _mk_button("导出WAV", _on_export)
 	_export_btn.tooltip_text = "把整曲实时录制成 WAV 文件（游戏引擎可直接用）"
+	var midi_in_btn := _mk_button("导入MIDI", _on_midi_import)
+	midi_in_btn.tooltip_text = "导入标准 MIDI 文件（.mid），按轨还原到工程"
+	var midi_out_btn := _mk_button("导出MIDI", _on_midi_export)
+	midi_out_btn.tooltip_text = "导出为标准 MIDI 文件（.mid），可导入其他音乐软件"
+	var score_btn := _mk_button("导出乐谱", _on_score_export)
+	score_btn.tooltip_text = "导出 MusicXML 乐谱（.musicxml），用 MuseScore（免费）等打开即可查看/打印"
 	var save_btn := _mk_button("保存", _on_save)
 	save_btn.tooltip_text = "保存工程（.bsong）"
 	var open_btn := _mk_button("打开", _on_open)
 	open_btn.tooltip_text = "打开工程（.bsong）"
 	var demo_btn := _mk_button("示范曲", _on_demo)
 	demo_btn.tooltip_text = "重新载入《小星星》示范工程"
-	hb.add_child(_group("文件", [_export_btn, save_btn, open_btn, demo_btn]))
-	return hb
+	flow.add_child(_group("文件", [_export_btn, midi_in_btn, midi_out_btn, score_btn, save_btn, open_btn, demo_btn]))
+	return flow
 
 
 func _build_tabs(parent: Control) -> void:
@@ -409,10 +455,10 @@ func _build_tabs(parent: Control) -> void:
 	play.name = "演奏"
 	play.add_theme_constant_override("separation", GAP_Y)
 	var hint := Label.new()
-	hint.text = "电脑键盘 = 琴键：Z 行低八度 · Q 行高八度（键帽字母印在琴键上）· ↑/↓ 切换八度 · 鼠标点击/滑奏可弹 · 「和弦模式」按一键出整个和弦 · 空格=播放/停止 · 键盘上 Ctrl+滚轮缩放"
+	hint.text = "电脑键盘 = 琴键：Z 行低八度 · Q 行高八度（键帽字母印在琴键上）· ↑/↓ 切换八度 · 鼠标点击/滑奏可弹 · 「和弦模式」按一键出整个和弦 · 空格=播放/停止 · Ctrl+Z 撤销 / Ctrl+Y 重做 · 键盘上 Ctrl+滚轮缩放　　提示：同按多个键受键盘硬件限制（普通键盘仅 2-6 键防串扰），和弦请用「和弦模式」或鼠标滑奏"
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.add_theme_font_size_override("font_size", 12)
-	hint.custom_minimum_size = Vector2(0, 30)
+	hint.custom_minimum_size = Vector2(0, 42)
 	play.add_child(hint)
 	var kb_row := HBoxContainer.new()
 	kb_row.add_theme_constant_override("separation", 6)
@@ -475,6 +521,7 @@ func _build_tabs(parent: Control) -> void:
 	roll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	roll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	roll.note_edited.connect(func() -> void:
+		history.push(song)
 		transport.refresh()
 		if analysis != null:
 			analysis.refresh())
@@ -544,6 +591,24 @@ func _build_dialogs() -> void:
 	_wav_dlg.filters = PackedStringArray(["*.wav ; WAV 音频"])
 	_wav_dlg.file_selected.connect(_on_wav_path)
 	add_child(_wav_dlg)
+	_midi_dlg = FileDialog.new()
+	_midi_dlg.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	_midi_dlg.access = FileDialog.ACCESS_FILESYSTEM
+	_midi_dlg.filters = PackedStringArray(["*.mid ; MIDI 文件", "*.midi ; MIDI 文件"])
+	_midi_dlg.file_selected.connect(_on_midi_imported)
+	add_child(_midi_dlg)
+	_midi_save_dlg = FileDialog.new()
+	_midi_save_dlg.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+	_midi_save_dlg.access = FileDialog.ACCESS_FILESYSTEM
+	_midi_save_dlg.filters = PackedStringArray(["*.mid ; MIDI 文件"])
+	_midi_save_dlg.file_selected.connect(_on_midi_export_path)
+	add_child(_midi_save_dlg)
+	_score_dlg = FileDialog.new()
+	_score_dlg.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+	_score_dlg.access = FileDialog.ACCESS_FILESYSTEM
+	_score_dlg.filters = PackedStringArray(["*.musicxml ; MusicXML 乐谱"])
+	_score_dlg.file_selected.connect(_on_score_path)
+	add_child(_score_dlg)
 
 
 func _mk_label(t: String) -> Label:
@@ -580,16 +645,73 @@ func _on_rec_toggle(on: bool) -> void:
 
 func _on_loop_toggle(on: bool) -> void:
 	transport.loop_play = on
+	roll.queue_redraw()
+
+
+## 循环区间 = 两个小节号 SpinBox；换工程时重置为整曲
+func _sync_loop_range_ui() -> void:
+	var bars := maxi(ceili(song.song_end_tick() / 16.0), 1)
+	_loop_a.set_value_no_signal(1)
+	_loop_b.set_value_no_signal(bars)
+	transport.loop_start = 0.0
+	transport.loop_end = bars * 16.0
+
+
+func _on_loop_range_changed(_v: float) -> void:
+	if _loop_b.value <= _loop_a.value:
+		_loop_b.set_value(_loop_a.value + 1)  # 再触发本回调后走正常路径
+		return
+	transport.loop_start = (_loop_a.value - 1) * 16.0
+	transport.loop_end = _loop_b.value * 16.0
+	roll.queue_redraw()
+
+
+## ── 撤销重做 ───────────────────────────────────────────────────────
+
+func _do_undo() -> void:
+	if not history.undo(song):
+		return
+	_after_history_restore()
+	_update_status("已撤销")
+
+
+func _do_redo() -> void:
+	if not history.redo(song):
+		return
+	_after_history_restore()
+	_update_status("已重做")
+
+
+## 快照还原后全面重建 UI 状态（音符引用已全部更换）
+func _after_history_restore() -> void:
+	_bpm_spin.set_value_no_signal(song.bpm)
+	_sel_track = clampi(_sel_track, 0, song.tracks.size() - 1)
+	roll.track_idx = _sel_track
+	roll.clear_drag_state()
+	_refresh_track_ui()
+	transport.refresh()
+	roll.queue_redraw()
+	if analysis != null:
+		analysis.refresh()
+
+
+func _update_edit_buttons(can_undo: bool, can_redo: bool) -> void:
+	_undo_btn.disabled = not can_undo
+	_redo_btn.disabled = not can_redo
 
 
 ## 播放自然结束/手动停止：收尾录制与导出
 func _on_transport_stopped() -> void:
 	_rec_btn.set_pressed_no_signal(false)
 	transport.recording = false
+	var finalized := not _rec_pending.is_empty()
 	for midi in _rec_pending:
 		var n: Dictionary = _rec_pending[midi]
 		n["l"] = maxi(_snap_tick(transport.playhead) - n["s"], 1)
 	_rec_pending.clear()
+	if finalized:
+		history.push(song)
+		roll.queue_redraw()
 	if _exporting:
 		_finish_export()
 
@@ -616,6 +738,20 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if k.physical_keycode == KEY_DOWN and k.pressed and not k.echo:
 			_shift_octave(-1)
+			return
+		# Ctrl 组合快捷键优先于弹奏键位（Z/Y 本身也是琴键）
+		if (k.ctrl_pressed or k.meta_pressed) and k.pressed and not k.echo:
+			if k.physical_keycode == KEY_Z:
+				if k.shift_pressed:
+					_do_redo()
+				else:
+					_do_undo()
+				return
+			if k.physical_keycode == KEY_Y:
+				_do_redo()
+				return
+			return  # 其余 Ctrl 组合不当作弹奏
+		if k.ctrl_pressed or k.meta_pressed:
 			return
 		var semi: int = NoteKeys.KEY_TO_SEMI.get(k.physical_keycode, -1)
 		if semi < 0:
@@ -703,6 +839,7 @@ func _live_note_off(midi: int) -> void:
 		_rec_pending.erase(midi)
 		var end_tick := _snap_tick(transport.playhead)
 		n["l"] = maxi(end_tick - n["s"], 1)
+		history.push(song)
 		transport.refresh()
 		roll.queue_redraw()
 
@@ -728,13 +865,22 @@ func _scale_semis() -> Array:
 	return NoteKeys.SCALES.values()[_mode_opt.selected]
 
 
-func _on_scale_changed(_on: bool) -> void:
+func _on_scale_toggled(_on: bool) -> void:
+	_apply_scale_helper()
+
+
+## 用户主动选调/音阶：若辅助没开就自动开（否则切换毫无可见反馈，像"坏了"）
+func _on_scale_picked() -> void:
+	if not _scale_chk.button_pressed:
+		_scale_chk.set_pressed_no_signal(true)
 	_apply_scale_helper()
 
 
 func _apply_scale_helper() -> void:
 	var on := _scale_chk.button_pressed
-	for widget in [keyboard, roll]:
+	for widget in [keyboard, mini_kb, roll]:
+		if widget == null:
+			continue
 		widget.key_root = _key_root()
 		widget.scale_notes = _scale_semis()
 		widget.scale_highlight = on
@@ -781,6 +927,7 @@ func _on_track_toggled(on: bool, idx: int) -> void:
 
 func _on_inst_changed(i: int) -> void:
 	song.tracks[_sel_track]["instrument"] = InstrumentBank.INSTRUMENTS[i]
+	history.push(song)
 	_refresh_track_ui()
 
 
@@ -843,6 +990,51 @@ func _on_opened(path: String) -> void:
 func _on_demo() -> void:
 	_switch_song(SongModel.make_demo())
 	_update_status("已加载示范曲《小星星》")
+
+
+## ── MIDI 导入导出 ──────────────────────────────────────────────────
+
+func _on_midi_import() -> void:
+	_midi_dlg.popup_centered(Vector2i(720, 480))
+
+
+func _on_midi_imported(path: String) -> void:
+	var s := MidiFile.import_file(path)
+	if s == null:
+		_update_status("MIDI 打开失败（仅支持标准 MIDI 文件）")
+		return
+	_switch_song(s)
+	_update_status("已导入 MIDI（%d 轨 %d 音符）：%s" % [s.tracks.size(), _total_notes(s), path])
+
+
+func _on_midi_export() -> void:
+	_midi_save_dlg.current_file = "未命名.mid"
+	_midi_save_dlg.popup_centered(Vector2i(720, 480))
+
+
+func _on_midi_export_path(path: String) -> void:
+	var err := MidiFile.export_song(song, path)
+	_update_status("MIDI 已导出：%s" % path if err == OK else "MIDI 导出失败（%d）" % err)
+
+
+## ── 乐谱导出（MusicXML → MuseScore 等查看/打印） ────────────────────
+
+func _on_score_export() -> void:
+	_score_dlg.current_file = "未命名.musicxml"
+	_score_dlg.popup_centered(Vector2i(720, 480))
+
+
+func _on_score_path(path: String) -> void:
+	var err := SheetMusic.export_song(song, path)
+	_update_status("乐谱已导出：%s（可用 MuseScore 打开）" % path if err == OK
+			else "乐谱导出失败（%d）" % err)
+
+
+static func _total_notes(s: SongModel) -> int:
+	var c := 0
+	for trk in s.tracks:
+		c += (trk["notes"] as Array).size()
+	return c
 
 
 ## ── WAV 导出（实时总线录制）────────────────────────────────────────
