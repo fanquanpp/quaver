@@ -59,8 +59,8 @@ var _snap_opt: OptionButton
 var _len_spin: SpinBox
 var _kb_scale: HSlider
 var _kb_span: OptionButton
-var _track_btns: Array[Button] = []
-var _inst_opt: OptionButton
+var track_list: TrackList
+var drum_seq: DrumSequencer
 var _undo_btn: Button
 var _redo_btn: Button
 var _export_btn: Button
@@ -409,22 +409,6 @@ func _build_options() -> Control:
 	zoom_in.tooltip_text = "放大（快捷键 =）"
 	flow.add_child(_group("编辑", [_undo_btn, _redo_btn, _snap_opt, _len_spin, _follow_chk, zoom_out, _zoom_lab, zoom_in]))
 
-	for i in 2:
-		var tb := Button.new()
-		tb.toggle_mode = true
-		tb.focus_mode = Control.FOCUS_NONE
-		tb.button_pressed = i == 0
-		tb.tooltip_text = "选择第 %d 轨（卷帘编辑与录制目标）" % (i + 1)
-		tb.toggled.connect(_on_track_toggled.bind(i))
-		_track_btns.append(tb)
-	_inst_opt = OptionButton.new()
-	for inst in InstrumentBank.INSTRUMENTS:
-		_inst_opt.add_item(inst)
-	_inst_opt.focus_mode = Control.FOCUS_NONE
-	_inst_opt.item_selected.connect(_on_inst_changed)
-	_inst_opt.tooltip_text = "当前轨的音色"
-	flow.add_child(_group("轨道", [_track_btns[0], _track_btns[1], _inst_opt]))
-
 	_export_btn = _mk_button("导出WAV", _on_export)
 	_export_btn.tooltip_text = "把整曲实时录制成 WAV 文件（游戏引擎可直接用）"
 	var midi_in_btn := _mk_button("导入MIDI", _on_midi_import)
@@ -502,13 +486,24 @@ func _build_tabs(parent: Control) -> void:
 	play.add_child(keyboard)
 	tabs.add_child(play)
 
-	# ── 编曲页（VSplit：卷帘区 / 迷你键盘区，分隔条可拖 = 布局区域可调） ──
+	# ── 编曲页（左轨道列表 + VSplit 卷帘/迷你键盘 + 底部鼓机步进） ──
 	var arrange := VBoxContainer.new()
 	arrange.name = "编曲"
 	arrange.add_theme_constant_override("separation", 2)
+	var body := HBoxContainer.new()
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", 4)
+	track_list = TrackList.new()
+	track_list.song = song
+	track_list.track_selected.connect(_on_track_selected)
+	track_list.mix_changed.connect(_on_track_mix_changed)
+	track_list.structure_changed.connect(_on_track_structure_changed)
+	body.add_child(track_list)
 	var vsplit := VSplitContainer.new()
 	vsplit.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vsplit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vsplit.size_flags_stretch_ratio = 1.0
 	vsplit.split_offset = 10000  # 先给底部最小高度，其余全给卷帘
 	var roll_area := VBoxContainer.new()
 	roll_area.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -526,7 +521,7 @@ func _build_tabs(parent: Control) -> void:
 		if analysis != null:
 			analysis.refresh())
 	roll.audition.connect(func(p: int) -> void:
-		Synth.play_note(song.tracks[_sel_track]["instrument"], p, 0.8))
+		Synth.play_note_on_track(_sel_track, song.tracks[_sel_track]["instrument"], p, 0.8))
 	roll.scroll_changed.connect(_on_roll_scrolled)
 	center.add_child(roll)
 	_vbar = VScrollBar.new()
@@ -556,7 +551,14 @@ func _build_tabs(parent: Control) -> void:
 	mini_kb.note_off.connect(_live_note_off)
 	kb_area.add_child(mini_kb)
 	vsplit.add_child(kb_area)
-	arrange.add_child(vsplit)
+	body.add_child(vsplit)
+	arrange.add_child(body)
+	drum_seq = DrumSequencer.new()
+	drum_seq.song = song
+	drum_seq.track_idx = 0
+	drum_seq.visible = false
+	drum_seq.edited.connect(_on_drum_edited)
+	arrange.add_child(drum_seq)
 	tabs.add_child(arrange)
 
 	# ── 分析页 ──
@@ -790,9 +792,9 @@ func _update_oct_label() -> void:
 	_oct_label.text = "八度：C%d – C%d" % [keyboard.base_octave, keyboard.base_octave + keyboard.octaves]
 
 
-## 走带音符触发（编曲播放）：发声 + 回声条可视化反馈
+## 走带音符触发（编曲播放）：按轨发声 + 回声条可视化反馈
 func _on_note_fired(trk: int, pitch: int, vel: float) -> void:
-	Synth.play_note(song.tracks[trk]["instrument"], pitch, vel)
+	Synth.play_note_on_track(trk, song.tracks[trk]["instrument"], pitch, vel)
 	_rain.note_hit(pitch, SongModel.TRACK_COLORS[song.tracks[trk]["color"] % SongModel.TRACK_COLORS.size()])
 
 
@@ -811,15 +813,15 @@ func _shift_octave(dir: int) -> void:
 	keyboard.queue_redraw()
 
 
-## 弹奏（键盘/鼠标共用）：发声 + 和弦模式 + 录制（两个键盘同步按压动画）
+## 弹奏（键盘/鼠标共用）：按轨发声 + 和弦模式 + 录制（两个键盘同步按压动画）
 func _live_note_on(midi: int) -> void:
 	var inst: String = song.tracks[_sel_track]["instrument"]
-	Synth.play_note(inst, midi, 0.85)
+	Synth.play_note_on_track(_sel_track, inst, midi, 0.85)
 	_rain.note_hit(midi, SongModel.TRACK_COLORS[song.tracks[_sel_track]["color"] % SongModel.TRACK_COLORS.size()])
 	if _chord_mode:
 		for c in Theory.scale_chord(midi, _key_root(), _scale_semis()):
 			if c != midi:
-				Synth.play_note(inst, c, 0.6)
+				Synth.play_note_on_track(_sel_track, inst, c, 0.6)
 	for kb in _all_keyboards():
 		kb.set_pressed_silent(midi, true)
 	if transport.playing and transport.recording:
@@ -912,31 +914,56 @@ func _update_zoom_lab() -> void:
 	_zoom_lab.text = "%d%%" % int(round(roll.px_per_tick / 10.0 * 100.0))
 
 
-func _on_track_toggled(on: bool, idx: int) -> void:
-	if not on:
-		if _sel_track == idx:
-			_track_btns[idx].set_pressed_no_signal(true)
-		return
+## ── 轨道列表 / 混音 ─────────────────────────────────────────────────
+
+func _on_track_selected(idx: int) -> void:
 	_sel_track = idx
 	roll.track_idx = idx
-	for i in _track_btns.size():
-		if i != idx:
-			_track_btns[i].set_pressed_no_signal(false)
-	_refresh_track_ui()
+	_sync_drum_panel()
 
 
-func _on_inst_changed(i: int) -> void:
-	song.tracks[_sel_track]["instrument"] = InstrumentBank.INSTRUMENTS[i]
+## 轨道行参数变化：即时刷总线；pushed=true 的改动落历史快照
+func _on_track_mix_changed(pushed: bool) -> void:
+	Synth.apply_mix(song.tracks)
+	if pushed:
+		history.push(song)
+	else:
+		history.mark_dirty()
+	roll.queue_redraw()
+
+
+## 加轨/删轨/切类型/清空：结构级变化
+func _on_track_structure_changed() -> void:
+	Synth.apply_mix(song.tracks)
 	history.push(song)
-	_refresh_track_ui()
+	transport.refresh()
+	_sel_track = clampi(_sel_track, 0, song.tracks.size() - 1)
+	roll.track_idx = _sel_track
+	_sync_drum_panel()
+	if analysis != null:
+		analysis.refresh()
+
+
+func _sync_drum_panel() -> void:
+	if drum_seq == null or song == null or song.tracks.is_empty():
+		return
+	drum_seq.track_idx = _sel_track
+	drum_seq.visible = song.tracks[_sel_track].get("type", "melody") == "drum"
+	drum_seq.refresh()
+
+
+func _on_drum_edited() -> void:
+	history.push(song)
+	transport.refresh()
+	roll.queue_redraw()
 
 
 func _refresh_track_ui() -> void:
-	for i in _track_btns.size():
-		var trk: Dictionary = song.tracks[i]
-		_track_btns[i].text = "轨%d %s" % [i + 1, trk["name"]]
-		_track_btns[i].set_pressed_no_signal(i == _sel_track)
-	_inst_opt.select(InstrumentBank.INSTRUMENTS.find(song.tracks[_sel_track]["instrument"]))
+	if track_list != null:
+		track_list.sel = clampi(_sel_track, 0, song.tracks.size() - 1)
+		track_list.refresh()
+	Synth.apply_mix(song.tracks)
+	_sync_drum_panel()
 
 
 func _on_tab_changed(idx: int) -> void:
@@ -1082,7 +1109,7 @@ func _update_status(msg := "") -> void:
 		return
 	var bank := "音源✓" if InstrumentBank.ready_ok else "音源载入中"
 	var be := "TS" if Theory.backend == "gode-typescript" else "GD"
-	_status_label.text = "%s %s ×%d" % [bank, be, Synth.POLYPHONY]
+	_status_label.text = "%s %s ×%d" % [bank, be, Synth.polyphony()]
 
 
 func _process(_delta: float) -> void:

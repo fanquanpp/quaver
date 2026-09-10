@@ -85,10 +85,10 @@ static func _copy_tracks(tracks: Array) -> Array[Dictionary]:
 		var notes: Array = []
 		for n in trk["notes"]:
 			notes.append({"p": n["p"], "s": n["s"], "l": n["l"], "v": n["v"]})
-		out.append({
-			"name": trk["name"], "instrument": trk["instrument"],
-			"color": trk["color"], "notes": notes,
-		})
+		# duplicate(true)：整轨深拷贝，自动覆盖 v2 混音字段（volume/pan/mute/...）
+		var copy: Dictionary = trk.duplicate(true)
+		copy["notes"] = notes
+		out.append(copy)
 	return out
 
 
@@ -104,7 +104,16 @@ static func _states_equal(a: Dictionary, b: Dictionary) -> bool:
 		var ta: Dictionary = a["tracks"][t]
 		var tb: Dictionary = b["tracks"][t]
 		if ta["name"] != tb["name"] or ta["instrument"] != tb["instrument"] \
-				or ta["color"] != tb["color"] or ta["notes"].size() != tb["notes"].size():
+				or ta["color"] != tb["color"] or ta["notes"].size() != tb["notes"].size() \
+				or ta.get("type", "melody") != tb.get("type", "melody") \
+				or ta.get("mute", false) != tb.get("mute", false) \
+				or ta.get("solo", false) != tb.get("solo", false) \
+				or JSON.stringify(ta.get("effects", [])) != JSON.stringify(tb.get("effects", [])):
+			return false
+		if absf(ta.get("volume", 0.8) - tb.get("volume", 0.8)) > 0.0005 \
+				or absf(ta.get("pan", 0.0) - tb.get("pan", 0.0)) > 0.0005 \
+				or absf(ta.get("reverb", 0.0) - tb.get("reverb", 0.0)) > 0.0005 \
+				or absf(ta.get("delay", 0.0) - tb.get("delay", 0.0)) > 0.0005:
 			return false
 		for i in ta["notes"].size():
 			var na: Dictionary = ta["notes"][i]

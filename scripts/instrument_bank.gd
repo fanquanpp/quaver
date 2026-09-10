@@ -1,21 +1,33 @@
 extends Node
 ## 自动加载 InstrumentBank —— 音源库
 ##
-## 启动时后台线程合成 4 音色 × 4 基音的 AudioStreamWAV（22050Hz 单声道 16bit，
-## 共约 1.4MB 内存），并写入 zstd 磁盘缓存；二次启动直接读缓存秒开。
-## 播放期零 DSP：Synth 用 pitch_scale 在 ±6 半音内移调取最近基音。
+## 启动时后台线程合成 6 音色 × 4 基音 × 3 力度层（pp/mf/ff）的 AudioStreamWAV
+## （22050Hz 单声道 16bit，全量约 8MB 内存），并写入 zstd 磁盘缓存；
+## 二次启动直接读缓存秒开。播放期零 DSP：Synth 用 pitch_scale 在 ±6 半音内移调。
+##
+## 力度分层（v0.2）：缓存 key = (音色, 基音, 力度层)；力度层按触发力度选档，
+## 层内再做音量连续控制（Synth volume_db）。
+## 鼓组（v0.2）：6 个鼓声部按音高映射，首次使用时按需合成、仅内存缓存
+## （每个声部 <0.3s 音频，不入磁盘缓存）。
 
 signal bank_ready
 
 const SR := 22050
-const CACHE_VERSION := 3
+const CACHE_VERSION := 4
 const CACHE_PATH := "user://sample_cache_v%d.bin"
 const BASE_NOTES := [36, 48, 60, 72]  # C2 C3 C4 C5
 const INSTRUMENTS := ["钢琴", "芯片", "柔弦", "贝斯", "电钢", "八音盒"]
+const DRUM_INST := "鼓组"
+## 鼓声部：音高 → 声部名（步进编辑器与本表对应）
+const DRUM_VOICES := {36: "底鼓", 38: "军鼓", 39: "拍手", 42: "踩镲", 45: "嗵鼓", 46: "开镲"}
+## 力度层阈值：v < 0.45 → pp；v < 0.8 → mf；否则 ff
+const VEL_THRESHOLDS := [0.45, 0.8]
+const LAYER_GAIN := [0.72, 0.88, 1.0]
 
 var ready_ok := false
 
-var _banks := {}  # inst_name -> {base_midi: AudioStreamWAV}
+var _banks := {}  # inst_name -> {base_midi: [wav_pp, wav_mf, wav_ff]}
+var _drums := {}  # 声部名 -> AudioStreamWAV（懒合成）
 var _thread: Thread = null
 
 
@@ -35,7 +47,9 @@ func _exit_tree() -> void:
 
 
 ## 返回 [AudioStreamWAV, pitch_scale]，无音色时返回 []
-func sample_for(inst: String, midi: int) -> Array:
+func sample_for(inst: String, midi: int, vel := 0.8) -> Array:
+	if inst == DRUM_INST:
+		return _drum_sample(midi)
 	var bank: Dictionary = _banks.get(inst, {})
 	var best := -1
 	var bd := 999
@@ -46,7 +60,31 @@ func sample_for(inst: String, midi: int) -> Array:
 			best = base
 	if best < 0:
 		return []
-	return [bank[best], pow(2.0, (midi - best) / 12.0)]
+	var layers: Array = bank[best]
+	return [layers[_layer_of(vel)], pow(2.0, (midi - best) / 12.0)]
+
+
+func _layer_of(vel: float) -> int:
+	for i in VEL_THRESHOLDS.size():
+		if vel < VEL_THRESHOLDS[i]:
+			return i
+	return VEL_THRESHOLDS.size()
+
+
+func _drum_sample(midi: int) -> Array:
+	if not _drums.has(midi):
+		var best := -1
+		var bd := 999
+		for p in DRUM_VOICES:
+			var d: int = absi(midi - p)
+			if d < bd:
+				bd = d
+				best = p
+		var voice: String = DRUM_VOICES[best]
+		if not _drums.has(best):
+			_drums[best] = _make_stream("鼓组:" + voice, best, 2)
+		_drums[midi] = _drums[best]
+	return [_drums[midi], 1.0]
 
 
 ## ── 合成 ───────────────────────────────────────────────────────────
@@ -55,7 +93,10 @@ func _generate_all() -> void:
 	for inst in INSTRUMENTS:
 		var bank := {}
 		for base in BASE_NOTES:
-			bank[base] = _make_stream(inst, base)
+			var layers := []
+			for layer in LAYER_GAIN.size():
+				layers.append(_make_stream(inst, base, layer))
+			bank[base] = layers
 		_banks[inst] = bank
 	_save_cache()
 	call_deferred("_finish")
@@ -67,19 +108,28 @@ func _finish() -> void:
 	print("[InstrumentBank] 音源合成完成")
 
 
-func _make_stream(inst: String, midi: int) -> AudioStreamWAV:
+func _make_stream(inst: String, midi: int, layer: int) -> AudioStreamWAV:
+	var freq := NoteKeys.midi_to_freq(midi)
 	var buf := PackedFloat32Array()
-	match inst:
-		"钢琴": buf = _synth_piano(NoteKeys.midi_to_freq(midi))
-		"芯片": buf = _synth_chip(NoteKeys.midi_to_freq(midi))
-		"柔弦": buf = _synth_pad(NoteKeys.midi_to_freq(midi))
-		"贝斯": buf = _synth_bass(NoteKeys.midi_to_freq(midi))
-		"电钢": buf = _synth_epiano(NoteKeys.midi_to_freq(midi))
-		"八音盒": buf = _synth_musicbox(NoteKeys.midi_to_freq(midi))
-	var n := buf.size()
+	if inst.begins_with(DRUM_INST + ":"):
+		buf = _synth_drum(inst.get_slice(":", 1), midi)
+	else:
+		match inst:
+			"钢琴": buf = _synth_piano(freq)
+			"芯片": buf = _synth_chip(freq)
+			"柔弦": buf = _synth_pad(freq)
+			"贝斯": buf = _synth_bass(freq)
+			"电钢": buf = _synth_epiano(freq)
+			"八音盒": buf = _synth_musicbox(freq)
+	buf = _normalize(buf)
+	# 力度层：合成后整体增益（ff 归一化到全幅，pp/mf 压低）
+	var g: float = LAYER_GAIN[layer]
+	if g < 1.0:
+		for i in buf.size():
+			buf[i] *= g
 	var data := PackedByteArray()
-	data.resize(n * 2)
-	for i in n:
+	data.resize(buf.size() * 2)
+	for i in buf.size():
 		data.encode_s16(i * 2, int(clampf(buf[i], -1.0, 1.0) * 32000.0))
 	var wav := AudioStreamWAV.new()
 	wav.format = AudioStreamWAV.FORMAT_16_BITS
@@ -87,6 +137,118 @@ func _make_stream(inst: String, midi: int) -> AudioStreamWAV:
 	wav.stereo = false
 	wav.data = data
 	return wav
+
+
+## 鼓组合成（声部名见 DRUM_VOICES）
+func _synth_drum(voice: String, midi: int) -> PackedFloat32Array:
+	match voice:
+		"底鼓":
+			return _drum_kick(115.0, 42.0, 0.30)
+		"嗵鼓":
+			return _drum_kick(210.0, 120.0, 0.28)
+		"军鼓":
+			return _drum_noise_mix(190.0, 0.16, 0.20, 0.9)
+		"拍手":
+			return _drum_clap()
+		"踩镲":
+			return _drum_hat(0.055)
+		"开镲":
+			return _drum_hat(0.38)
+		_:
+			return _drum_kick(float(midi), 60.0, 0.25)
+
+
+## 底鼓/嗵鼓：正弦下滑 + 起振click
+func _drum_kick(f_start: float, f_end: float, dur: float) -> PackedFloat32Array:
+	var n := int(dur * SR)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var phase := 0.0
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 42
+	var click := 1.0
+	for i in n:
+		var t := float(i) / SR
+		var f := f_end + (f_start - f_end) * exp(-t * 34.0)
+		phase += TAU * f / SR
+		var env := exp(-t * 13.0)
+		var v := sin(phase) * env
+		if click > 0.01:
+			v += rng.randf_range(-1.0, 1.0) * 0.5 * click
+			click *= exp(-t * 900.0)
+		buf[i] = v
+	return buf
+
+
+## 军鼓：噪声 + 鼓皮音高双成分
+func _drum_noise_mix(tone_freq: float, dur: float, tone_amt: float, noise_decay: float) -> PackedFloat32Array:
+	var n := int(dur * SR)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	var prev := 0.0
+	var phase := 0.0
+	var w := TAU * tone_freq / SR
+	for i in n:
+		var t := float(i)
+		phase += w
+		var raw := rng.randf_range(-1.0, 1.0)
+		var hp := raw - prev  # 一阶差分 ≈ 高通，噪声更"沙"
+		prev = raw
+		var noise := hp * exp(-noise_decay * t / SR)
+		var tone := sin(phase) * exp(-t * 42.0 / SR)
+		buf[i] = noise * (1.0 - tone_amt * 0.5) + tone * tone_amt
+	return buf
+
+
+## 拍手：4 连短噪声脉冲 + 尾音
+func _drum_clap() -> PackedFloat32Array:
+	var n := int(0.30 * SR)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 9
+	var prev := 0.0
+	var bursts := [0.0, 0.011, 0.023, 0.036]
+	for i in n:
+		var t := float(i) / SR
+		var raw := rng.randf_range(-1.0, 1.0)
+		var hp := raw - prev
+		prev = raw
+		var v := 0.0
+		for b in bursts.size():
+			var dt: float = t - bursts[b]
+			if dt >= 0.0:
+				var decay := 90.0 if b < bursts.size() - 1 else 18.0
+				v += hp * exp(-decay * dt) * (0.6 if b < bursts.size() - 1 else 0.8)
+		buf[i] = v
+	return buf
+
+
+## 镲：6 个不谐和方波叠 + 高通噪声（金属感），decay 控制开/闭
+func _drum_hat(dur: float) -> PackedFloat32Array:
+	var n := int(dur * SR)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 11
+	var prev := 0.0
+	var freqs := [3311.0, 4417.0, 5273.0, 6611.0, 8127.0, 9373.0]
+	var phases := PackedFloat64Array()
+	phases.resize(freqs.size())
+	for i in n:
+		var t := float(i)
+		var metallic := 0.0
+		for h in freqs.size():
+			phases[h] += TAU * freqs[h] / SR
+			metallic += 1.0 if fmod(phases[h], TAU) < PI else -1.0
+		metallic /= freqs.size()
+		var raw := rng.randf_range(-1.0, 1.0)
+		var hp := raw - prev
+		prev = raw
+		buf[i] = (metallic * 0.7 + hp * 0.5) * exp(-t * 26.0 / SR)
+	return buf
 
 
 ## 7 次谐波加法合成 + 微失谐 + 锤击瞬态，分音区衰减
@@ -273,9 +435,12 @@ func _save_cache() -> void:
 		f.store_16(bank.size())
 		for base in bank:
 			f.store_16(base)
-			var data: PackedByteArray = (bank[base] as AudioStreamWAV).data
-			f.store_32(data.size())
-			f.store_buffer(data)
+			var layers: Array = bank[base]
+			f.store_8(layers.size())
+			for wav in layers:
+				var data: PackedByteArray = (wav as AudioStreamWAV).data
+				f.store_32(data.size())
+				f.store_buffer(data)
 	f.close()
 
 
@@ -292,14 +457,18 @@ func _load_cache() -> bool:
 		var nb := f.get_16()
 		for b in nb:
 			var base := f.get_16()
-			var size := f.get_32()
-			var data := f.get_buffer(size)
-			var wav := AudioStreamWAV.new()
-			wav.format = AudioStreamWAV.FORMAT_16_BITS
-			wav.mix_rate = SR
-			wav.stereo = false
-			wav.data = data
-			bank[base] = wav
+			var layers := []
+			var nl := f.get_8()
+			for l in nl:
+				var size := f.get_32()
+				var data := f.get_buffer(size)
+				var wav := AudioStreamWAV.new()
+				wav.format = AudioStreamWAV.FORMAT_16_BITS
+				wav.mix_rate = SR
+				wav.stereo = false
+				wav.data = data
+				layers.append(wav)
+			bank[base] = layers
 		_banks[inst] = bank
 	f.close()
 	return _banks.size() == INSTRUMENTS.size()

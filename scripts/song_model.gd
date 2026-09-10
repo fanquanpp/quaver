@@ -5,10 +5,23 @@ extends RefCounted
 ## 时间单位：1 tick = 1/16 音符（4 ticks = 1 拍，16 ticks = 1 小节）。
 ## 音符为轻量 Dictionary {p:音高, s:起始tick, l:长度tick, v:力度0-1}，
 ## 引用语义便于钢琴卷帘拖拽时原地修改；存盘时平铺为整型流再压缩。
+##
+## v0.2 轨道模型（VERSION = 2）：
+##   type     "melody" | "drum"（鼓机步进轨）
+##   volume   0-1 轨道音量（对应轨道 Bus 增益）
+##   pan      -1..1 声像（轨道 Bus Panner）
+##   mute/solo 静音/独奏（独奏激活时非独奏轨等效静音）
+##   reverb/delay 辅助发送量 0-1（Reverb/Delay Bus）
+##   effects  效果链参数快照 [{type, params}]（JSON 序列化）
+##   automation 预留（v0.3 自动化曲线）
+## 读到 v1 工程自动迁移：新字段填默认值。
 
 const MAGIC := 0x42535131  # "BSQ1"
-const VERSION := 1
+const VERSION := 2
 const TICKS_PER_BEAT := 4
+const MAX_TRACKS := 16
+
+const DEFAULT_VOLUME := 0.8
 
 const TRACK_COLORS := [
 	Color("4fc3f7"), Color("ffb74d"), Color("aed581"),
@@ -16,7 +29,8 @@ const TRACK_COLORS := [
 ]
 
 var bpm := 90.0
-## 每轨: {name:String, instrument:String, color:int, notes:Array[Dictionary]}
+## 每轨: {name, instrument, color, notes, type, volume, pan, mute, solo,
+##        reverb, delay, effects, automation}
 var tracks: Array[Dictionary] = []
 
 
@@ -26,14 +40,37 @@ func _init() -> void:
 		add_track("伴奏", "芯片")
 
 
-func add_track(t_name: String, instrument: String) -> int:
-	tracks.append({
+## 一条轨道的完整字段（v2）；旧代码只读前四个字段不受影响
+static func make_track(t_name: String, instrument: String, color: int, type := "melody") -> Dictionary:
+	return {
 		"name": t_name,
 		"instrument": instrument,
-		"color": tracks.size() % TRACK_COLORS.size(),
+		"color": color,
 		"notes": [],
-	})
+		"type": type,
+		"volume": DEFAULT_VOLUME,
+		"pan": 0.0,
+		"mute": false,
+		"solo": false,
+		"reverb": 0.0,
+		"delay": 0.0,
+		"effects": [],
+		"automation": [],
+	}
+
+
+func add_track(t_name: String, instrument: String, type := "melody") -> int:
+	tracks.append(make_track(t_name, instrument, tracks.size() % TRACK_COLORS.size(), type))
 	return tracks.size() - 1
+
+
+## 删除轨道（至少保留 1 条）；返回被删轨道名，越界返回 ""
+func remove_track(i: int) -> String:
+	if i < 0 or i >= tracks.size() or tracks.size() <= 1:
+		return ""
+	var name: String = tracks[i]["name"]
+	tracks.remove_at(i)
+	return name
 
 
 func track_notes(i: int) -> Array:
@@ -77,6 +114,7 @@ func secs_per_tick() -> float:
 
 ## ── 序列化 ─────────────────────────────────────────────────────────
 ## .bsong：zstd 压缩二进制，千音符工程 < 10KB
+## v1 轨道布局：name/instrument/color/notes；v2 在 color 后追加混音字段
 
 func save(path: String) -> Error:
 	var f := FileAccess.open_compressed(path, FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
@@ -90,6 +128,7 @@ func save(path: String) -> Error:
 		f.store_pascal_string(trk["name"])
 		f.store_pascal_string(trk["instrument"])
 		f.store_32(trk["color"])
+		_store_track_v2(f, trk)
 		var notes: Array = trk["notes"]
 		f.store_32(notes.size())
 		for n in notes:
@@ -102,11 +141,27 @@ func save(path: String) -> Error:
 	return err
 
 
+static func _store_track_v2(f: FileAccess, trk: Dictionary) -> void:
+	f.store_pascal_string(trk.get("type", "melody"))
+	f.store_16(int(round(trk.get("volume", DEFAULT_VOLUME) * 1000.0)))
+	f.store_16(int(round((clampf(trk.get("pan", 0.0), -1.0, 1.0) + 1.0) * 1000.0)))
+	var flags := 0
+	if trk.get("mute", false):
+		flags |= 1
+	if trk.get("solo", false):
+		flags |= 2
+	f.store_8(flags)
+	f.store_16(int(round(trk.get("reverb", 0.0) * 1000.0)))
+	f.store_16(int(round(trk.get("delay", 0.0) * 1000.0)))
+	f.store_pascal_string(JSON.stringify(trk.get("effects", [])))
+	f.store_pascal_string(JSON.stringify(trk.get("automation", [])))
+
+
 static func load_from(path: String) -> SongModel:
 	var f := FileAccess.open_compressed(path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
 	if f == null or f.get_32() != MAGIC:
 		return null
-	f.get_16()  # 版本号（当前固定为 1，向前兼容预留）
+	var version := f.get_16()
 	var s := SongModel.new()
 	s.tracks.clear()
 	s.bpm = f.get_float()
@@ -118,6 +173,11 @@ static func load_from(path: String) -> SongModel:
 			"color": f.get_32(),
 			"notes": [],
 		}
+		if version >= 2:
+			_load_track_v2(f, trk)
+		else:
+			# v1 → v2 迁移：新字段填默认值
+			trk.merge(make_track(trk["name"], trk["instrument"], trk["color"]))
 		var count := f.get_32()
 		for i in count:
 			trk["notes"].append({
@@ -127,6 +187,21 @@ static func load_from(path: String) -> SongModel:
 		s.tracks.append(trk)
 	f.close()
 	return s
+
+
+static func _load_track_v2(f: FileAccess, trk: Dictionary) -> void:
+	trk["type"] = f.get_pascal_string()
+	trk["volume"] = clampf(f.get_16() / 1000.0, 0.0, 1.5)
+	trk["pan"] = clampf(f.get_16() / 1000.0 - 1.0, -1.0, 1.0)
+	var flags := f.get_8()
+	trk["mute"] = (flags & 1) != 0
+	trk["solo"] = (flags & 2) != 0
+	trk["reverb"] = clampf(f.get_16() / 1000.0, 0.0, 1.0)
+	trk["delay"] = clampf(f.get_16() / 1000.0, 0.0, 1.0)
+	var fx: Variant = JSON.parse_string(f.get_pascal_string())
+	trk["effects"] = fx if fx is Array else []
+	var auto: Variant = JSON.parse_string(f.get_pascal_string())
+	trk["automation"] = auto if auto is Array else []
 
 
 ## ── 示范曲：《小星星》双轨 ────────────────────────────────────────

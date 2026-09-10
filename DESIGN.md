@@ -298,3 +298,19 @@ res://
 - 现象：演奏页回声条+琴键整体被红色覆盖，鼠标活动时"频繁触发"，用户疑为悬停效果
 - 证据链：① 两轮全量源码检索无任何红色绘制/歌词代码；② 截图中出现手写体歌词文本——本作是纯音乐工具，全工程无歌词功能；③ 进程与窗口枚举发现 `cloudmusic.exe` 持有标题为**「桌面歌词」的顶层窗口**（网易云音乐）
 - 结论：红色层为**网易云音乐桌面歌词悬浮窗**叠在游戏窗口上方（其样式即红底手写字），随歌词刷新/鼠标活动而变化，被误认为程序内悬停效果。程序内悬停逻辑 v0.1.4 已按需求收敛：仅工具栏按钮保留描边式悬停，琴键/布局区域无任何悬停触发
+
+## 17. v0.2.0 N 轨系统 + 总线路由 + 走带时钟迁移（2026-09-11）
+
+**数据模型 v2（.bsong VERSION=2）**：轨道新增 `type/volume/pan/mute/solo/reverb/delay/effects/automation` 字段（`SongModel.make_track` 默认值）；读 v1 工程自动迁移填默认（`load_from` 按版本分支）；`remove_track`（保底 1 轨）与 `MAX_TRACKS=16` 上限。EditHistory 快照改整轨 `duplicate(true)` 深拷贝，混音字段入快照；状态比较扩展 volume/pan/mute/solo/type/effects。
+
+**音频总线路由（Synth 重构）**：Master=[EQ10,Limiter] ← Music=[EQ6] / Drum=[Compressor] ← Track0..15 轨道总线（懒创建）=[Panner,EQ6,Compressor,Reverb,Delay]。轨道音量→`set_bus_volume_db`、声像→Panner、静音/独奏→`set_bus_mute`（独奏激活时非独奏轨等效静音，走带与总线双重过滤）。**辅助发送采用插入式实现**（Godot 4 移除了带发送量的 AudioEffectSend，属 Godot 3）：轨道常驻 Reverb/Delay，wet 电平=发送量，dry=1 干声直通。发声 API 升级 `play_note_on_track(track,…)` 按轨路由；播放器池动态 `max(32,轨数×8)` 上限 128。
+
+**走带时钟迁移（Transport 重构）**：playhead 由音频混音时钟锚定——`墙钟 + (get_time_since_last_mix() − get_output_latency())×1000`（减延迟补回扬声器侧，playhead=可听位置），混音未发生（headless）自动回退墙钟；音符 look-ahead=输出延迟（play() 起音到出声恰隔一个延迟，提前触发即对齐出声时刻）；`clock_override` Callable 注入时钟供测试帧步进。**修复旧版循环边界丢失**：回卷时剩余事件绝对 tick 平移一个循环跨度（旧版 [end, end+提前量) 音符每圈被丢）。`use_audio_clock=false` 为风险矩阵保留的回退开关。
+
+**轨道列表 UI（新 TrackList）**：编曲页左侧 N 轨面板替代工具栏双轨按钮——色块/选择/音色/M/S/音量/声像滑杆，右键重命名/清空/切旋律·鼓机/删除，底部"+ 添加轨道"；混音参数即时生效（`mix_changed`→apply_mix，滑杆拖动 mark_dirty、松手 push）。
+
+**鼓机步进轨**：`type="drum"` 的轨道复用普通音符存储（pitch=声部音高、s=bar×16+步、l=1），走带/卷帘/MIDI/撤销全部免费复用；DrumSequencer 面板 16 步×6 声部（底鼓36/军鼓38/拍手39/踩镲42/嗵鼓45/开镲46），左键开关步（v=0.75）右键重音（v=1.0），选中鼓轨自动显示。音源库新增"鼓组"懒合成音色（kick 下扫正弦/军鼓噪声+鼓皮/拍手四连脉冲/镲不谐和方波叠）。
+
+**力度分层（缓存 v4）**：缓存 key 扩展为 (音色,基音,力度层)，pp/mf/ff 三档（阈值 0.45/0.8，层增益 0.72/0.88/1.0），`sample_for(inst,midi,vel)` 按力度选层、层内音量连续控制。
+
+**测试**：新增 `smoke_v020.gd`（v2 往返、v1 迁移、轨上限、混音快照、总线状态/独奏、力度分层、鼓组、循环边界、鼓轨端到端）；smoke_v013/v014 全过（v014 走带测试迁移到注入时钟）。gode 升至 2.4.4（Signal<T>/interface[] 检查器等，不触及本项目 TS 用法）。

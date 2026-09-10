@@ -129,11 +129,14 @@ func _test_loop_region() -> void:
 	t.loop_play = true
 	t.loop_start = 16.0
 	t.loop_end = 64.0
+	var fake := {"msec": 0.0}
+	t.clock_override = func() -> float:
+		fake["msec"] += 500.0
+		return fake["msec"]
 	t.play(0.0)
 	_check(t.playing, "播放应启动")
-	var dt := 0.5  # 0.5s = 3.2 tick；30 步 ≈ 96 tick，保证至少两次穿过 64 边界
-	for i in 30:
-		t._process(dt)
+	for i in 30:  # 每步 +0.5s ≈ 3.2 tick；30 步 ≈ 96 tick，保证至少两次穿过 64 边界
+		t._process(0.5)
 	_check(t.playing, "循环模式不应停止")
 	_check(t.playhead >= 16.0 and t.playhead < 64.0,
 			"循环应落在区间内，实际 %.2f" % t.playhead)
@@ -144,6 +147,10 @@ func _test_transport_no_loop_stops_at_end() -> void:
 	var s := SongModel.make_demo()
 	var t := Transport.new()
 	t.song = s
+	var fake := {"msec": 0.0}
+	t.clock_override = func() -> float:
+		fake["msec"] += 100.0
+		return fake["msec"]
 	t.play(0.0)
 	var guard := 0
 	while t.playing and guard < 20000:
@@ -210,7 +217,7 @@ func _test_synth_grab() -> void:
 		return  # 音源未就绪时跳过（音色测试会等待）
 	var now := Time.get_ticks_msec()
 	# 打满全部声部（一次性衰减采样会持续播放）
-	for i in Synth.POLYPHONY:
+	for i in Synth.polyphony():
 		Synth.play_note("钢琴", 40 + (i % 24), 0.3)
 	var all_playing := true
 	for p in Synth._players:
@@ -218,10 +225,10 @@ func _test_synth_grab() -> void:
 			all_playing = false
 			break
 	_check(all_playing, "48 次连击后所有声部应在播（无丢触发）")
-	for i in Synth.POLYPHONY:
+	for i in Synth.polyphony():
 		Synth._start_ms[i] = now - 1000 - i
-	_check(Synth._grab() == Synth.POLYPHONY - 1, "应抢断最旧声部")
-	for i in Synth.POLYPHONY:
+	_check(Synth._grab() == Synth.polyphony() - 1, "应抢断最旧声部")
+	for i in Synth.polyphony():
 		Synth._start_ms[i] = now - 10  # 全部刚起音 <80ms：仍必须返回有效声部
 	_check(Synth._grab() >= 0, "极端连击下也必须有声部可用")
 	Synth.stop_all()
