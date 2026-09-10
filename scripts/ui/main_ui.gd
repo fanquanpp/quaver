@@ -62,6 +62,7 @@ var _kb_scale: HSlider
 var _kb_span: OptionButton
 var track_list: TrackList
 var drum_seq: DrumSequencer
+var mixer: MixerPanel
 var _undo_btn: Button
 var _redo_btn: Button
 var _export_btn: Button
@@ -580,7 +581,22 @@ func _build_tabs(parent: Control) -> void:
 	analysis.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	analysis.apply_key.connect(_on_apply_detected_key)
 	ana.add_child(analysis)
-	tabs.add_child(ana)
+	# ── 混音页（v1.0.0 混音台工作区） ──
+	var mix_page := VBoxContainer.new()
+	mix_page.name = "混音"
+	mix_page.add_theme_constant_override("separation", GAP_Y)
+	mixer = MixerPanel.new()
+	mixer.song = song
+	mixer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	mixer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mixer.mix_changed.connect(_on_track_mix_changed)
+	mix_page.add_child(mixer)
+	var mix_tip := Label.new()
+	mix_tip.text = "混音台：推子=音量 · 声像 · 混响/延迟发送 · M 静音 / S 独奏 · Master 主音量（与轨道列表实时联动）"
+	mix_tip.add_theme_font_size_override("font_size", 12)
+	mix_tip.add_theme_color_override("font_color", COL_TEXT_DIM)
+	mix_page.add_child(mix_tip)
+	tabs.add_child(mix_page)
 
 
 func _build_dialogs() -> void:
@@ -1042,6 +1058,8 @@ func _refresh_track_ui() -> void:
 	if track_list != null:
 		track_list.sel = clampi(_sel_track, 0, song.tracks.size() - 1)
 		track_list.refresh()
+	if mixer != null:
+		mixer.refresh()
 	Synth.apply_mix(song.tracks)
 	_sync_drum_panel()
 

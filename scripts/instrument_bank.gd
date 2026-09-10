@@ -18,6 +18,8 @@ const CACHE_PATH := "user://sample_cache_v%d.bin"
 const BASE_NOTES := [36, 48, 60, 72]  # C2 C3 C4 C5
 const INSTRUMENTS := ["钢琴", "芯片", "柔弦", "贝斯", "电钢", "八音盒"]
 const DRUM_INST := "鼓组"
+const PLUGIN_PATH := "user://instrument_plugins.json"
+const SFZ_DIR := "user://sfz"
 ## 鼓声部：音高 → 声部名（步进编辑器与本表对应）
 const DRUM_VOICES := {36: "底鼓", 38: "军鼓", 39: "拍手", 42: "踩镲", 45: "嗵鼓", 46: "开镲"}
 ## 力度层阈值：v < 0.45 → pp；v < 0.8 → mf；否则 ff
@@ -25,15 +27,21 @@ const VEL_THRESHOLDS := [0.45, 0.8]
 const LAYER_GAIN := [0.72, 0.88, 1.0]
 
 var ready_ok := false
+## 动态音色列表（内置 + 插件配方 + SFZ）；UI 下拉一律读这里
+var instruments: Array = []
 
 var _banks := {}  # inst_name -> {base_midi: [wav_pp, wav_mf, wav_ff]}
 var _drums := {}  # 声部名 -> AudioStreamWAV（懒合成）
+var _sfz := {}    # "sfz:名" -> [{stream, lokey, hikey, lovel, hivel, key_center}]
 var _thread: Thread = null
 
 
 func _ready() -> void:
+	instruments = INSTRUMENTS.duplicate()
 	if _load_cache():
 		ready_ok = true
+		_load_plugins()
+		_load_sfz_all()
 		bank_ready.emit()
 		print("[InstrumentBank] 缓存加载完成")
 		return
@@ -50,6 +58,8 @@ func _exit_tree() -> void:
 func sample_for(inst: String, midi: int, vel := 0.8) -> Array:
 	if inst == DRUM_INST:
 		return _drum_sample(midi)
+	if inst.begins_with("sfz:"):
+		return _sfz_sample(inst, midi, vel)
 	var bank: Dictionary = _banks.get(inst, {})
 	var best := -1
 	var bd := 999
@@ -103,9 +113,119 @@ func _generate_all() -> void:
 
 
 func _finish() -> void:
+	_load_plugins()
+	_load_sfz_all()
 	ready_ok = true
 	bank_ready.emit()
 	print("[InstrumentBank] 音源合成完成")
+
+
+## ── 插件配方音色（v1.0.0） ─────────────────────────────────────────
+## user://instrument_plugins.json：
+## [{"name": "我的音色", "recipe": {"harmonics": [1, 0.4], "decay": 3.0,
+##   "attack": 0.003, "click": 0.1, "dur": 2.4, "wave": "sine", "gain": 0.7}}]
+## 配方级插件每次启动按需合成（小体量，不入磁盘缓存）。
+
+func _load_plugins() -> void:
+	if not FileAccess.file_exists(PLUGIN_PATH):
+		return
+	var f := FileAccess.open(PLUGIN_PATH, FileAccess.READ)
+	if f == null:
+		return
+	var data: Variant = JSON.parse_string(f.get_as_text())
+	f.close()
+	if not (data is Array):
+		return
+	for p in data:
+		if p is Dictionary and p.get("name", "") != "" and p.get("recipe", {}) is Dictionary:
+			register_plugin(p["name"], p["recipe"])
+
+
+func register_plugin(p_name: String, recipe: Dictionary) -> void:
+	if p_name in instruments:
+		return
+	var bank := {}
+	for base in BASE_NOTES:
+		var layers := []
+		for layer in LAYER_GAIN.size():
+			layers.append(_stream_from_buf(_synth_recipe(NoteKeys.midi_to_freq(base), recipe), layer))
+		bank[base] = layers
+	_banks[p_name] = bank
+	instruments.append(p_name)
+
+
+## 通用参数配方合成：谐波加法（可换方波/锯波）+ 起音/衰减/噪声瞬态
+func _synth_recipe(freq: float, r: Dictionary) -> PackedFloat32Array:
+	var dur := clampf(float(r.get("dur", 2.0)), 0.1, 6.0)
+	var harmonics: Array = r.get("harmonics", [1.0])
+	var decay := maxf(float(r.get("decay", 2.5)), 0.2)
+	var attack := clampf(float(r.get("attack", 0.004)), 0.0, 0.5)
+	var click := clampf(float(r.get("click", 0.0)), 0.0, 1.0)
+	var gain := clampf(float(r.get("gain", 0.7)), 0.1, 1.0)
+	var wave: String = r.get("wave", "sine")
+	var n := int(dur * SR)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var phases := PackedFloat64Array()
+	phases.resize(harmonics.size())
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 77
+	var click_env := 1.0
+	var attack_n := maxi(int(attack * SR), 1)
+	for i in n:
+		var t := float(i)
+		var v := 0.0
+		for h in harmonics.size():
+			phases[h] += TAU * freq * (h + 1) / SR
+			var osc := 0.0
+			var ph := fmod(phases[h], TAU)
+			match wave:
+				"square":
+					osc = 1.0 if ph < PI else -1.0
+				"saw":
+					osc = ph / PI - 1.0
+				_:
+					osc = sin(ph)
+			v += osc * float(harmonics[h]) * exp(-decay * (1.0 + 0.3 * h) * t / SR)
+		if i < attack_n:
+			v *= float(i) / attack_n
+		if click_env > 0.003 and click > 0.0:
+			v += rng.randf_range(-1.0, 1.0) * click * click_env
+			click_env *= exp(-80.0 / SR)
+		buf[i] = v * gain
+	return _normalize(buf)
+
+
+## ── SFZ 采样音色（v1.0.0；SF2 二进制格式另评估） ───────────────────
+## 扫描 user://sfz/*.sfz，音色名 = "sfz:文件名"
+
+func _load_sfz_all() -> void:
+	if not DirAccess.dir_exists_absolute(SFZ_DIR):
+		return
+	var dir := DirAccess.open(SFZ_DIR)
+	if dir == null:
+		return
+	dir.list_dir_begin()
+	var fname := dir.get_next()
+	while fname != "":
+		if fname.ends_with(".sfz"):
+			var regions := SfzLoader.load_instrument(SFZ_DIR + "/" + fname)
+			if not regions.is_empty():
+				_sfz["sfz:" + fname.get_basename()] = regions
+				if not ("sfz:" + fname.get_basename()) in instruments:
+					instruments.append("sfz:" + fname.get_basename())
+		fname = dir.get_next()
+
+
+func _sfz_sample(inst: String, midi: int, vel: float) -> Array:
+	var regions: Array = _sfz.get(inst, [])
+	var v127 := int(vel * 127.0)
+	for r in regions:
+		if midi >= r["lokey"] and midi <= r["hikey"] \
+				and v127 >= r["lovel"] and v127 <= r["hivel"]:
+			var key_center: int = r["key_center"]
+			return [r["stream"], pow(2.0, (midi - key_center) / 12.0)]
+	return []
 
 
 func _make_stream(inst: String, midi: int, layer: int) -> AudioStreamWAV:
@@ -121,8 +241,12 @@ func _make_stream(inst: String, midi: int, layer: int) -> AudioStreamWAV:
 			"贝斯": buf = _synth_bass(freq)
 			"电钢": buf = _synth_epiano(freq)
 			"八音盒": buf = _synth_musicbox(freq)
+	return _stream_from_buf(buf, layer)
+
+
+## 浮点缓冲 → 力度层 AudioStreamWAV（层增益 + 16bit 编码）
+func _stream_from_buf(buf: PackedFloat32Array, layer: int) -> AudioStreamWAV:
 	buf = _normalize(buf)
-	# 力度层：合成后整体增益（ff 归一化到全幅，pp/mf 压低）
 	var g: float = LAYER_GAIN[layer]
 	if g < 1.0:
 		for i in buf.size():

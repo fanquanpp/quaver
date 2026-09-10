@@ -119,14 +119,14 @@ func _build_row(i: int) -> PanelContainer:
 		h.add_child(drum_lab)
 	else:
 		var inst_opt := OptionButton.new()
-		for inst in InstrumentBank.INSTRUMENTS:
+		for inst in InstrumentBank.instruments:
 			inst_opt.add_item(inst)
 		inst_opt.focus_mode = Control.FOCUS_NONE
-		inst_opt.select(InstrumentBank.INSTRUMENTS.find(trk["instrument"]))
+		inst_opt.select(InstrumentBank.instruments.find(trk["instrument"]))
 		inst_opt.custom_minimum_size = Vector2(52, 0)
 		inst_opt.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		inst_opt.item_selected.connect(func(j: int) -> void:
-			trk["instrument"] = InstrumentBank.INSTRUMENTS[j]
+			trk["instrument"] = InstrumentBank.instruments[j]
 			mix_changed.emit(true))
 		inst_opt.tooltip_text = "轨道音色"
 		h.add_child(inst_opt)

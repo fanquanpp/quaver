@@ -348,3 +348,13 @@ res://
 **MIDI 导入自定义映射**：user://gm_map.json 覆盖内置 GM 启发式——`{"chan9": "鼓组", "programs": {"0": "贝斯"}}`；打击乐通道优先于程序号映射；非法音色值自动回退启发式；映射结果缓存（改文件后重启生效）。
 
 **体验打磨**：播放头跟随新增"居中"模式（播放头恒居中 vs 页面滚动跟随）；Ctrl+0 重置缩放并回卷视图。原计划的 1–4 工具切换键不适用（本作卷帘为无模式交互：上下文即工具），如实裁剪。
+
+## 21. v1.0.0 混音台工作区 + 音色插件 + SFZ 采样音源（2026-09-11）
+
+**混音台工作区**（新"混音"标签页，MixerPanel）：横向通道条 = 每轨（音量推子/声像/混响·延迟发送/M·S）+ Master 主音量条；改动即时写回轨道并 apply_mix（与轨道列表双向联动），滑杆拖动 mark_dirty、松手落快照。
+
+**音色插件系统 v1（参数配方级）**：user://instrument_plugins.json 声明 `[{name, recipe}]`，配方含 harmonics（谐波幅度表）/wave（sine·square·saw）/decay/attack/click/dur/gain——通用配方合成器在启动时生成全力度层采样并注册进动态音色列表（InstrumentBank.instruments，UI 下拉自动收录）；插件不入磁盘缓存（小体量按需合成）。v1 定位为"参数配方级"插件：SFZ 采样与内置合成统一在 sample_for 接口下，SFZ 采样音色力度层由 region lovel/hivel 承担。
+
+**SFZ 采样音源**（SfzLoader）：扫描 user://sfz/*.sfz 注册为 "sfz:文件名" 音色。支持 SFZ v1 常用子集：sample/key/pitch_keycenter/lokey/hikey/lovel/hivel，<group> 默认值、行内多 opcode、// 注释；WAV 经 AudioStreamWAV.load_from_file 直接读取，pitch_keycenter 定移调基准、lovel/hivel 参与力度选区。**SF2（二进制 RIFF 采样库）解析器如实延期**——需独立的 RIFF/sample chunk 解析与压缩格式（如 cwsdram/24bit 打包）支持，工作量与测试面不在 v1.0 收口范围内，待有真实 SF2 资产需求时重估（Clef Midi 插件路线亦保留观察）。
+
+**测试**：smoke_v100（插件注册/去重/力度层、SFZ 双 region 解析+移调比、混音台刷新）；六套件全过。
