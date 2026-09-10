@@ -33,6 +33,8 @@ func _ready() -> void:
 	_menu.add_item("清空音符", 2)
 	_menu.add_item("切换 旋律/鼓机", 3)
 	_menu.add_item("删除轨道", 4)
+	_menu.add_separator()
+	_menu.add_item("存为轨道预设", 5)
 	_menu.id_pressed.connect(_on_menu)
 	add_child(_menu)
 
@@ -87,6 +89,7 @@ func _build_row(i: int) -> PanelContainer:
 				and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_RIGHT:
 			_select(i)
 			_menu_row = i
+			_rebuild_preset_items()
 			_menu.popup(Rect2i(get_global_mouse_position(), Vector2i(1, 1))))
 
 	var h := HBoxContainer.new()
@@ -200,9 +203,33 @@ func _on_add_track() -> void:
 	structure_changed.emit()
 
 
+## 右键弹出前重建"加载预设"动态项（id 100+i）
+func _rebuild_preset_items() -> void:
+	var ids_to_remove: Array = []
+	for i in _menu.item_count:
+		var id := _menu.get_item_id(i)
+		if id >= 100:
+			ids_to_remove.append(id)
+	# 从后往前删，索引不失效
+	ids_to_remove.reverse()
+	for id in ids_to_remove:
+		_menu.remove_item(_menu.get_item_index(id))
+	var presets := TrackPresets.list_all()
+	if presets.is_empty():
+		return
+	_menu.add_separator()
+	var names := presets.keys()
+	names.sort()
+	for i in names.size():
+		_menu.add_item("预设 ▸ %s" % names[i], 100 + i)
+
+
 func _on_menu(id: int) -> void:
 	var i := _menu_row
 	_menu_row = -1
+	if id >= 100:
+		_load_preset(i, id - 100)
+		return
 	if i < 0 or i >= song.tracks.size():
 		return
 	match id:
@@ -224,6 +251,22 @@ func _on_menu(id: int) -> void:
 			sel = clampi(sel, 0, song.tracks.size() - 1)
 			refresh()
 			structure_changed.emit()
+		5:
+			if i < song.tracks.size():
+				TrackPresets.save_track(song.tracks[i])
+
+
+func _load_preset(row: int, preset_idx: int) -> void:
+	if row < 0 or row >= song.tracks.size():
+		return
+	var presets := TrackPresets.list_all()
+	var names := presets.keys()
+	names.sort()
+	if preset_idx >= names.size():
+		return
+	TrackPresets.apply_to(song.tracks[row], names[preset_idx])
+	mix_changed.emit(true)
+	structure_changed.emit()
 
 
 ## 行内重命名：名称按钮换成 LineEdit，回车/失焦提交

@@ -10,6 +10,10 @@ extends RefCounted
 
 const PPQ := 480
 const TICKS_PER_QUANTA := 30  # PPQ / 16分音符数每四分音符
+const GM_MAP_PATH := "user://gm_map.json"
+
+static var _gm_map := {}
+static var _gm_map_loaded := false
 
 ## 本软件音色 → GM 程序号（大钢琴/方波主音/暖垫/指弹贝斯/电钢/八音盒）
 const INST_TO_PROGRAM := {
@@ -242,8 +246,18 @@ static func _parse(data: PackedByteArray) -> Dictionary:
 
 
 static func _program_to_inst(prog: int, chan: int) -> String:
+	var m := _load_gm_map()
+	# 打击乐通道优先（语义独立于程序号）
 	if chan == 9:
-		return "芯片"  # 打击乐通道：暂用芯片承载，鼓机音色见路线图
+		var drum: String = m.get("chan9", "芯片")
+		return drum if _inst_valid(drum) else "芯片"
+	# v0.3.1：用户自定义映射优先（user://gm_map.json，见 _load_gm_map）
+	if not m.is_empty():
+		var programs: Dictionary = m.get("programs", {})
+		if programs.has(str(int(prog))):
+			var inst: String = programs[str(int(prog))]
+			if _inst_valid(inst):
+				return inst
 	if prog == 4:
 		return "电钢"
 	if prog == 8 or prog == 10:
@@ -255,6 +269,27 @@ static func _program_to_inst(prog: int, chan: int) -> String:
 	if (prog >= 80 and prog <= 87) or (prog >= 96 and prog <= 103):
 		return "芯片"
 	return "钢琴"
+
+
+## 自定义映射表：{"chan9": "鼓组", "programs": {"0": "贝斯", ...}}
+## 值必须是有效音色（InstrumentBank 音色或"鼓组"），非法值回退内置启发式
+static func _load_gm_map() -> Dictionary:
+	if _gm_map_loaded:
+		return _gm_map
+	_gm_map_loaded = true
+	if not FileAccess.file_exists(GM_MAP_PATH):
+		return {}
+	var f := FileAccess.open(GM_MAP_PATH, FileAccess.READ)
+	if f == null:
+		return {}
+	var data: Variant = JSON.parse_string(f.get_as_text())
+	f.close()
+	_gm_map = data if data is Dictionary else {}
+	return _gm_map
+
+
+static func _inst_valid(inst: String) -> bool:
+	return inst == InstrumentBank.DRUM_INST or inst in InstrumentBank.INSTRUMENTS
 
 
 static func _u16(d: PackedByteArray, i: int) -> int:

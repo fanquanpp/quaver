@@ -532,13 +532,16 @@ func set_zoom(f: float, focus_tick := -1.0) -> void:
 	set_scroll(maxf(t * px_per_tick - (size.x - MARGIN_L) * 0.5, 0.0), scroll_y)
 
 
-## 播放时让播放头保持在可视区内（自动跟随）
-func follow_playhead() -> void:
+## 播放时让播放头保持在可视区内（跟随）。centered=true = 播放头固定居中，
+## false = 页面滚动跟随（到边缘才滚动）
+func follow_playhead(centered := false) -> void:
 	if transport == null or not transport.playing:
 		return
 	var view := size.x - MARGIN_L
 	var px := transport.playhead * px_per_tick - scroll_x
-	if px > view - 100.0 or px < 0.0:
+	if centered:
+		set_scroll(maxf(transport.playhead * px_per_tick - view * 0.5, 0.0), scroll_y)
+	elif px > view - 100.0 or px < 0.0:
 		set_scroll(maxf(transport.playhead * px_per_tick - view * 0.3, 0.0), scroll_y)
 
 

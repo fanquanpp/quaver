@@ -43,6 +43,7 @@ var _loop_chk: CheckButton
 var _loop_a: SpinBox
 var _loop_b: SpinBox
 var _follow_chk: CheckButton
+var _center_chk: CheckButton
 var _rain: NoteRain
 var _zoom_lab: Label
 var _bpm_spin: SpinBox
@@ -403,13 +404,15 @@ func _build_options() -> Control:
 	_len_spin.tooltip_text = "新音符默认长度（1 = 1/16 音符）"
 	_follow_chk = _mk_check("跟随", true, func(_on: bool) -> void: pass)
 	_follow_chk.tooltip_text = "播放时卷帘自动跟随播放头滚动"
+	_center_chk = _mk_check("居中", false, func(_on: bool) -> void: pass)
+	_center_chk.tooltip_text = "跟随模式：播放头固定居中（关 = 页面滚动跟随）"
 	var zoom_out := _mk_button("−", _on_zoom_out)
 	zoom_out.tooltip_text = "缩小（快捷键 -）"
 	_zoom_lab = _mk_label("100%")
 	_zoom_lab.custom_minimum_size = Vector2(44, 0)
 	var zoom_in := _mk_button("+", _on_zoom_in)
 	zoom_in.tooltip_text = "放大（快捷键 =）"
-	flow.add_child(_group("编辑", [_undo_btn, _redo_btn, _snap_opt, _len_spin, _follow_chk, zoom_out, _zoom_lab, zoom_in]))
+	flow.add_child(_group("编辑", [_undo_btn, _redo_btn, _snap_opt, _len_spin, _follow_chk, _center_chk, zoom_out, _zoom_lab, zoom_in]))
 
 	_export_btn = _mk_button("导出WAV", _on_export)
 	_export_btn.tooltip_text = "把整曲实时录制成 WAV 文件（游戏引擎可直接用）"
@@ -745,6 +748,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		var k := event as InputEventKey
 		if (k.physical_keycode == KEY_EQUAL or k.physical_keycode == KEY_MINUS) and k.pressed and not k.echo:
 			roll.set_zoom(roll.px_per_tick * (1.25 if k.physical_keycode == KEY_EQUAL else 1.0 / 1.25))
+			_update_zoom_lab()
+			return
+		if (k.ctrl_pressed or k.meta_pressed) and k.physical_keycode == KEY_0 and k.pressed and not k.echo:
+			roll.set_zoom(10.0)
+			roll.scroll_to_start()
 			_update_zoom_lab()
 			return
 		if k.physical_keycode == KEY_SPACE and k.pressed and not k.echo:
@@ -1271,5 +1279,5 @@ func _process(_delta: float) -> void:
 		var beat := int(fmod(transport.playhead, 16.0) / 4.0) + 1
 		_pos_label.text = "第 %d 小节 %d/4" % [bar, beat]
 		if _follow_chk.button_pressed:
-			roll.follow_playhead()
+			roll.follow_playhead(_center_chk.button_pressed)
 		roll.queue_redraw()
