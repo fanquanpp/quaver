@@ -1,6 +1,6 @@
 <div align="center">
 
-# 编趣 Quaver
+# 编趣 Quaver · 献GAY老猫————我的挚爱
 
 **纯电脑键盘弹奏 + 鼠标点击编曲的桌面端纯音乐工具**
 
