@@ -11,13 +11,16 @@ extends Control
 signal note_edited
 signal audition(pitch: int)
 signal scroll_changed(x: float, y: float)
+signal selection_changed(has_sel: bool)
 
 const MARGIN_L := 72.0
 const MARGIN_T := 22.0
+const MARGIN_B := 56.0   ## 底部力度编辑条高度（v0.2.1）
 const ROW_H := 12.0
 const PITCH_MAX := 107  # 顶行音高（B7）
 const PITCH_MIN := 21   # 底行音高（A0）
 const N_ROWS := PITCH_MAX - PITCH_MIN + 1
+const GHOST_NOTE_LIMIT := 1500  ## 其他轨音符总数超过此值时本帧跳过幽灵渲染
 
 const C := {
 	"bg": Color("23272f"), "row_white": Color("262b34"), "row_black": Color("1d2129"),
@@ -38,7 +41,7 @@ var px_per_tick := 10.0
 var scroll_x := 0.0
 var scroll_y := 0.0
 
-var _drag := -1          # -1无 0新建 1移动 2改长 3删除
+var _drag := -1          # -1无 0新建 1移动 2改长 3删除 4力度条 5框选
 var _drag_dirty := false # 本次拖拽是否真的改动了数据（无效拖拽不进撤销栈）
 var _temp := {}          # 新建中的音符 {p,s,l}
 var _drag_orig := {}
@@ -47,6 +50,15 @@ var _drag_ref_pitch := 0
 var _hover := {}         # 正在拖拽/改长的音符引用（拖拽机制用，不作悬停高亮）
 var _kbd_midi := -1
 var _sb_cache := {}      # 音符/琴键 StyleBox 缓存（圆角抗锯齿）
+
+# v0.2.1 多选 / 批量 / 剪贴板 / 力度条
+var _selected: Array = []        # 选中的音符引用（当前轨）
+var _box_start := Vector2.ZERO   # 框选起点（视口坐标）
+var _box_rect := Rect2()         # 框选矩形；size==0 表示不在框选
+var _vel_target := {}            # 力度条拖拽目标音符
+var _vel_ref_v := 0.0
+static var _clipboard: Array = []  # 复制的音符 [{p,s,l,v}]（相对基准）
+static var _clip_base := {"s": 0, "p": 60}
 
 
 ## 圆角音符样式（缓存按颜色；1px 深描边 + 圆角消除直角锯齿感）
@@ -119,7 +131,7 @@ func _max_scroll_x() -> float:
 
 
 func _max_scroll_y() -> float:
-	return maxf(0.0, N_ROWS * ROW_H - (size.y - MARGIN_T))
+	return maxf(0.0, N_ROWS * ROW_H - (size.y - MARGIN_T - MARGIN_B))
 
 
 func set_scroll(x: float, y: float, emit := true) -> void:
@@ -183,12 +195,25 @@ func _press_left(pos: Vector2) -> void:
 			_kbd_midi = p
 			audition.emit(p)
 		return
+	if pos.y >= size.y - MARGIN_B:  # 力度编辑条
+		_drag = 4
+		_drag_dirty = false
+		_vel_target = _nearest_note_at_x(pos.x)
+		if not _vel_target.is_empty():
+			_vel_ref_v = _set_vel_at(pos.y, _vel_target)
+		return
 	var tick := _snapped(maxf(_tick_at(pos.x), 0.0))
 	var pitch := _pitch_at(pos.y)
 	if pitch < PITCH_MIN or pitch > PITCH_MAX:
 		return
 	var note := song.note_at(track_idx, pitch, tick)
 	if not note.is_empty():
+		if Input.is_key_pressed(KEY_SHIFT) and not _selected.is_empty():
+			_toggle_selected(note)
+			_drag = -1
+			selection_changed.emit(has_selection())
+			queue_redraw()
+			return
 		var end_x := _x_of_tick(note["s"] + note["l"])
 		if absf(pos.x - end_x) <= 6.0:
 			_drag = 2
@@ -198,7 +223,23 @@ func _press_left(pos: Vector2) -> void:
 		_drag_ref_tick = _tick_at(pos.x)
 		_drag_ref_pitch = pitch
 		_hover = note
+		# 点选未选中的音符 = 重新单选；拖动已选音符 = 整组批量移动
+		if not _selected.has(note):
+			if not Input.is_key_pressed(KEY_SHIFT):
+				_selected = [note]
+			else:
+				_selected.append(note)
+		selection_changed.emit(has_selection())
 	else:
+		if Input.is_key_pressed(KEY_SHIFT):  # Shift+空白 = 框选起点
+			_drag = 5
+			_box_start = pos
+			_box_rect = Rect2(pos, Vector2.ZERO)
+			queue_redraw()
+			return
+		if not _selected.is_empty():
+			_selected = []
+			selection_changed.emit(false)
 		_drag = 0
 		_temp = {"p": pitch, "s": tick, "l": maxi(default_len, 1)}
 		audition.emit(pitch)
@@ -216,7 +257,13 @@ func _release_left() -> void:
 			note_edited.emit()
 	elif _drag == 3:
 		if _drag_dirty:
+			_prune_selection()
 			note_edited.emit()
+	elif _drag == 4:
+		if _drag_dirty:
+			note_edited.emit()
+	elif _drag == 5:
+		_finish_box_select()
 	_drag = -1
 	queue_redraw()
 
@@ -225,6 +272,10 @@ func _mouse_motion(pos_m: InputEventMouseMotion) -> void:
 	var pos := pos_m.position
 	if _drag == -1:
 		return  # 无拖拽时鼠标移动不触发重绘（悬停高亮已按用户要求移除）
+	if _drag == 5:  # 框选
+		_box_rect = Rect2(_box_start, pos - _box_start).abs()
+		queue_redraw()
+		return
 	if pos.x < MARGIN_L:
 		return
 	var tick_f := maxf(_tick_at(pos.x), 0.0)
@@ -243,8 +294,22 @@ func _mouse_motion(pos_m: InputEventMouseMotion) -> void:
 			var np: int = clampi(_drag_orig["p"] + dpitch, PITCH_MIN, PITCH_MAX)
 			var ns: int = maxi(_drag_orig["s"] + dtick, 0)
 			if np != note["p"] or ns != note["s"]:
-				note["p"] = np
-				note["s"] = ns
+				# 批量移动：目标音符在选区 → 整组按同一位移移动
+				if _selected.has(note):
+					var moved := false
+					for sel in _selected:
+						var sp: int = clampi(int(sel["p"]) + dpitch, PITCH_MIN, PITCH_MAX)
+						var ss: int = maxi(int(sel["s"]) + dtick, 0)
+						if sp != sel["p"] or ss != sel["s"]:
+							sel["p"] = sp
+							sel["s"] = ss
+							moved = true
+					_drag_orig = {"p": np, "s": ns, "l": note["l"]}
+					_drag_ref_tick = tick_f
+					_drag_ref_pitch = _pitch_at(pos.y)
+				else:
+					note["p"] = np
+					note["s"] = ns
 				_drag_dirty = true
 				audition.emit(np)
 				queue_redraw()
@@ -259,6 +324,18 @@ func _mouse_motion(pos_m: InputEventMouseMotion) -> void:
 				queue_redraw()
 		3:
 			_delete_at(pos)
+		4:  # 力度条：绝对高度设定；若目标在选区则整组同增量
+			if _vel_target.is_empty():
+				return
+			var nv := _set_vel_at(pos.y, _vel_target)
+			if _selected.has(_vel_target):
+				var delta: float = nv - _vel_ref_v
+				for sel in _selected:
+					if sel != _vel_target:
+						sel["v"] = clampf(sel["v"] + delta, 0.05, 1.0)
+			_vel_ref_v = nv
+			_drag_dirty = true
+			queue_redraw()
 
 
 func _delete_at(pos: Vector2) -> void:
@@ -279,6 +356,173 @@ func clear_drag_state() -> void:
 	_drag = -1
 	_hover = {}
 	_temp = {}
+	_selected = []
+	_box_rect = Rect2()
+	_vel_target = {}
+	selection_changed.emit(false)
+
+
+## ── 选择 / 剪贴板 / 批量操作（v0.2.1） ─────────────────────────────
+
+func has_selection() -> bool:
+	return not _selected.is_empty()
+
+
+func select_all() -> void:
+	_selected = song.track_notes(track_idx).duplicate()
+	selection_changed.emit(has_selection())
+	queue_redraw()
+
+
+func clear_selection() -> void:
+	_selected = []
+	selection_changed.emit(false)
+	queue_redraw()
+
+
+func _toggle_selected(note: Dictionary) -> void:
+	if _selected.has(note):
+		_selected.erase(note)
+	else:
+		_selected.append(note)
+
+
+## 拖删后把已失效引用清出选区
+func _prune_selection() -> void:
+	var notes := song.track_notes(track_idx)
+	_selected = _selected.filter(func(n: Dictionary) -> bool: return notes.has(n))
+	selection_changed.emit(has_selection())
+
+
+func _finish_box_select() -> void:
+	var sel: Array = []
+	if _box_rect.size.x > 2.0 or _box_rect.size.y > 2.0:
+		var t0 := minf(_tick_at(_box_rect.position.x), _tick_at(_box_rect.end.x))
+		var t1 := maxf(_tick_at(_box_rect.position.x), _tick_at(_box_rect.end.x))
+		var p_hi := _pitch_at(maxf(_box_rect.position.y, _box_rect.end.y))
+		var p_lo := _pitch_at(minf(_box_rect.position.y, _box_rect.end.y))
+		for n in song.track_notes(track_idx):
+			if n["p"] >= p_lo and n["p"] <= p_hi \
+					and n["s"] + n["l"] > t0 and n["s"] < t1:
+				sel.append(n)
+	_box_rect = Rect2()
+	_selected = sel
+	selection_changed.emit(has_selection())
+	queue_redraw()
+
+
+func copy_selection() -> bool:
+	if _selected.is_empty():
+		return false
+	_copy_notes(_selected)
+	return true
+
+
+func cut_selection() -> bool:
+	if _selected.is_empty():
+		return false
+	_copy_notes(_selected)
+	delete_selection()
+	return true
+
+
+static func _copy_notes(notes: Array) -> void:
+	var clip := []
+	var min_s := 99999999
+	var min_p := 127
+	for n in notes:
+		clip.append({"p": n["p"], "s": n["s"], "l": n["l"], "v": n["v"]})
+		min_s = mini(min_s, n["s"])
+		min_p = mini(min_p, n["p"])
+	_clipboard = clip
+	_clip_base = {"s": min_s, "p": min_p}
+
+
+## 粘贴到播放头（吸附网格）：保持原音高，仅平移时间；粘贴后选区指向新音符
+func paste_at_playhead() -> bool:
+	if _clipboard.is_empty():
+		return false
+	var base_tick := 0.0
+	if transport != null:
+		base_tick = maxf(transport.playhead, 0.0)
+	var d_s: int = _snapped(base_tick) - _clip_base["s"]
+	var pasted := []
+	for n in _clipboard:
+		pasted.append(song.add_note(track_idx, n["p"],
+				maxi(n["s"] + d_s, 0), n["l"], n["v"]))
+	_selected = pasted
+	selection_changed.emit(true)
+	note_edited.emit()
+	queue_redraw()
+	return true
+
+
+func delete_selection() -> bool:
+	if _selected.is_empty():
+		return false
+	for n in _selected:
+		song.remove_note(track_idx, n)
+	_selected = []
+	selection_changed.emit(false)
+	note_edited.emit()
+	queue_redraw()
+	return true
+
+
+## 选区量化到当前网格
+func quantize_selection() -> bool:
+	if _selected.is_empty():
+		return false
+	var g := maxi(snap, 1)
+	for n in _selected:
+		n["s"] = int(round(n["s"] / float(g))) * g
+	note_edited.emit()
+	queue_redraw()
+	return true
+
+
+func transpose_selection(semis: int) -> bool:
+	if _selected.is_empty():
+		return false
+	for n in _selected:
+		n["p"] = clampi(n["p"] + semis, PITCH_MIN, PITCH_MAX)
+	audition.emit(_selected[0]["p"])
+	note_edited.emit()
+	queue_redraw()
+	return true
+
+
+func nudge_selection_velocity(delta: float) -> bool:
+	if _selected.is_empty():
+		return false
+	for n in _selected:
+		n["v"] = clampf(n["v"] + delta, 0.05, 1.0)
+	note_edited.emit()
+	queue_redraw()
+	return true
+
+
+## 力度条：找 x 附近最近起音的音符；返回设定后的力度
+func _nearest_note_at_x(px: float) -> Dictionary:
+	var notes := song.track_notes(track_idx)
+	if notes.is_empty():
+		return {}
+	var best := {}
+	var bd := 1e9
+	for n in notes:
+		var d: float = absf(_x_of_tick(n["s"]) - px)
+		if d < bd:
+			bd = d
+			best = n
+	return best
+
+
+func _set_vel_at(pos_y: float, note: Dictionary) -> float:
+	var lane_top := size.y - MARGIN_B
+	var v := clampf(1.0 - (pos_y - lane_top) / (MARGIN_B - 6.0), 0.05, 1.0)
+	note["v"] = v
+	queue_redraw()
+	return v
 
 
 ## 设置横向缩放（px/tick），围绕指定 tick（默认视口中心）缩放
@@ -303,8 +547,9 @@ func follow_playhead() -> void:
 func _draw() -> void:
 	var w := size.x
 	var h := size.y
+	var note_h := h - MARGIN_B  # 音符区底边（下方是力度条）
 	draw_rect(Rect2(0, 0, w, h), C["bg"])
-	var view_h := h - MARGIN_T
+	var view_h := note_h - MARGIN_T
 	var p_hi: int = clampi(PITCH_MAX - int(scroll_y / ROW_H), PITCH_MIN, PITCH_MAX)
 	var p_lo: int = clampi(PITCH_MAX - int((scroll_y + view_h) / ROW_H) - 1, PITCH_MIN, PITCH_MAX)
 	var t0: float = maxf(_tick_at(MARGIN_L), 0.0)
@@ -326,10 +571,10 @@ func _draw() -> void:
 				continue
 			var x := floorf(_x_of_tick(t)) + 0.5
 			var col: Color = C["gridbeat"] if t % 4 == 0 else C["grid16"]
-			draw_line(Vector2(x, MARGIN_T), Vector2(x, h), col, 1.0)
+			draw_line(Vector2(x, MARGIN_T), Vector2(x, note_h), col, 1.0)
 	for b in range(int(t0 / bar), int(t1 / bar) + 1):
 		var xb := floorf(_x_of_tick(b * bar)) + 0.5
-		draw_line(Vector2(xb, MARGIN_T), Vector2(xb, h), C["gridbar"], 1.0)
+		draw_line(Vector2(xb, MARGIN_T), Vector2(xb, note_h), C["gridbar"], 1.0)
 
 	# 2.5 循环区间着色 + 边界线（走带开着循环时显示）
 	if transport != null and transport.loop_play:
@@ -339,24 +584,38 @@ func _draw() -> void:
 			var lx0 := maxf(_x_of_tick(ls), MARGIN_L)
 			var lx1 := minf(_x_of_tick(le), w)
 			if lx1 > lx0:
-				draw_rect(Rect2(lx0, MARGIN_T, lx1 - lx0, h - MARGIN_T),
+				draw_rect(Rect2(lx0, MARGIN_T, lx1 - lx0, note_h - MARGIN_T),
 						Color(0.35, 0.6, 1.0, 0.045))
 				draw_rect(Rect2(lx0, 0, lx1 - lx0, MARGIN_T), Color(0.35, 0.6, 1.0, 0.18))
 				for xl in [lx0, lx1]:
 					if xl >= MARGIN_L and xl <= w:
 						draw_line(Vector2(floorf(xl) + 0.5, MARGIN_T),
-								Vector2(floorf(xl) + 0.5, h), Color(0.45, 0.65, 1.0, 0.55), 1.0)
+								Vector2(floorf(xl) + 0.5, note_h), Color(0.45, 0.65, 1.0, 0.55), 1.0)
 
-	# 3. 幽灵音符（其他轨，半透明）
+	# 3. 幽灵音符（其他轨，半透明；视口裁剪 + 密度上限防 N 轨渲染爆炸）
+	var ghost_total := 0
 	for trk in song.tracks.size():
-		if trk == track_idx:
-			continue
-		for n in song.tracks[trk]["notes"]:
-			_draw_note(n, trk, 0.20)
+		if trk != track_idx:
+			ghost_total += (song.tracks[trk]["notes"] as Array).size()
+	if ghost_total <= GHOST_NOTE_LIMIT:
+		for trk2 in song.tracks.size():
+			if trk2 == track_idx:
+				continue
+			for n in song.tracks[trk2]["notes"]:
+				var gx := _x_of_tick(n["s"])
+				if gx > w or gx + n["l"] * px_per_tick < MARGIN_L:
+					continue
+				_draw_note(n, trk2, 0.20)
 
-	# 4. 当前轨音符（力度档位量化到 0.05，避免样式缓存膨胀；不做悬停高亮）
+	# 4. 当前轨音符（力度档位量化到 0.05；选中描白边）
 	for n2 in song.track_notes(track_idx):
-		_draw_note(n2, track_idx, 0.55 + 0.45 * snappedf(n2["v"], 0.05))
+		var alpha := 0.55 + 0.45 * snappedf(n2["v"], 0.05)
+		_draw_note(n2, track_idx, alpha, _selected.has(n2))
+
+	# 4.5 框选矩形
+	if _box_rect.size != Vector2.ZERO:
+		draw_rect(_box_rect, Color(0.45, 0.65, 1.0, 0.10), true)
+		draw_rect(_box_rect, Color(0.45, 0.65, 1.0, 0.7), false, 1.0, true)
 
 	# 5. 新建预览
 	if not _temp.is_empty():
@@ -366,10 +625,27 @@ func _draw() -> void:
 	if transport != null:
 		var xh := floorf(_x_of_tick(transport.playhead))
 		if xh >= MARGIN_L and xh <= w:
-			draw_line(Vector2(xh, MARGIN_T), Vector2(xh, h), C["playhead"], 2.0)
+			draw_line(Vector2(xh, MARGIN_T), Vector2(xh, note_h), C["playhead"], 2.0)
 			draw_colored_polygon(PackedVector2Array([
 				Vector2(xh - 5, MARGIN_T), Vector2(xh + 5, MARGIN_T), Vector2(xh, MARGIN_T + 6)
 			]), C["playhead"])
+
+	# 6.5 力度编辑条（当前轨；柱高=力度，选中音符柱加亮）
+	draw_rect(Rect2(0, note_h, w, MARGIN_B), Color("1a1d24"))
+	draw_line(Vector2(0, note_h + 0.5), Vector2(w, note_h + 0.5), C["border"], 1.0)
+	var lane_h := MARGIN_B - 14.0
+	draw_string(ThemeDB.fallback_font, Vector2(4, note_h + 12), "力度",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 9, C["text"])
+	for n3 in song.track_notes(track_idx):
+		var vx := _x_of_tick(n3["s"])
+		if vx < MARGIN_L - 4.0 or vx > w:
+			continue
+		var bh: float = maxf(n3["v"] * lane_h, 2.0)
+		var sel_col := _note_color(track_idx, 1.0) if _selected.has(n3) \
+				else _note_color(track_idx, 0.55)
+		draw_rect(Rect2(floorf(vx), note_h + MARGIN_B - 4.0 - bh, 4.0, bh), sel_col)
+		draw_rect(Rect2(floorf(vx) - 1.0, note_h + MARGIN_B - 4.0 - bh - 1.0, 6.0, 2.0),
+				_note_color(track_idx, 1.0))
 
 	# 7. 左侧琴键列
 	draw_rect(Rect2(0, MARGIN_T, MARGIN_L - 2.0, view_h), C["bg"])

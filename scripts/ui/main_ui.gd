@@ -74,8 +74,10 @@ var _wav_dlg: FileDialog
 var _midi_dlg: FileDialog
 var _midi_save_dlg: FileDialog
 var _score_dlg: FileDialog
+var _tracks_dlg: FileDialog
 var _rec_effect: AudioEffectRecord
 var _exporting := false
+var _track_export := {}  # 分轨导出状态机 {active, queue, base, rec_bus, saved_mutes, saved_loop}
 
 var _icons_tex: Texture2D
 
@@ -411,6 +413,8 @@ func _build_options() -> Control:
 
 	_export_btn = _mk_button("导出WAV", _on_export)
 	_export_btn.tooltip_text = "把整曲实时录制成 WAV 文件（游戏引擎可直接用）"
+	var tracks_btn := _mk_button("分轨导出", _on_export_tracks)
+	tracks_btn.tooltip_text = "每条轨道各导出一个独立 WAV（含该轨总线效果；导出耗时=轨数×曲长）"
 	var midi_in_btn := _mk_button("导入MIDI", _on_midi_import)
 	midi_in_btn.tooltip_text = "导入标准 MIDI 文件（.mid），按轨还原到工程"
 	var midi_out_btn := _mk_button("导出MIDI", _on_midi_export)
@@ -423,7 +427,7 @@ func _build_options() -> Control:
 	open_btn.tooltip_text = "打开工程（.bsong）"
 	var demo_btn := _mk_button("示范曲", _on_demo)
 	demo_btn.tooltip_text = "重新载入《小星星》示范工程"
-	flow.add_child(_group("文件", [_export_btn, midi_in_btn, midi_out_btn, score_btn, save_btn, open_btn, demo_btn]))
+	flow.add_child(_group("文件", [_export_btn, tracks_btn, midi_in_btn, midi_out_btn, score_btn, save_btn, open_btn, demo_btn]))
 	return flow
 
 
@@ -523,6 +527,7 @@ func _build_tabs(parent: Control) -> void:
 	roll.audition.connect(func(p: int) -> void:
 		Synth.play_note_on_track(_sel_track, song.tracks[_sel_track]["instrument"], p, 0.8))
 	roll.scroll_changed.connect(_on_roll_scrolled)
+	roll.selection_changed.connect(_on_selection_changed)
 	center.add_child(roll)
 	_vbar = VScrollBar.new()
 	_vbar.focus_mode = Control.FOCUS_NONE
@@ -559,6 +564,7 @@ func _build_tabs(parent: Control) -> void:
 	drum_seq.visible = false
 	drum_seq.edited.connect(_on_drum_edited)
 	arrange.add_child(drum_seq)
+	arrange.add_child(_build_sel_bar())
 	tabs.add_child(arrange)
 
 	# ── 分析页 ──
@@ -611,6 +617,12 @@ func _build_dialogs() -> void:
 	_score_dlg.filters = PackedStringArray(["*.musicxml ; MusicXML 乐谱"])
 	_score_dlg.file_selected.connect(_on_score_path)
 	add_child(_score_dlg)
+	_tracks_dlg = FileDialog.new()
+	_tracks_dlg.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+	_tracks_dlg.access = FileDialog.ACCESS_FILESYSTEM
+	_tracks_dlg.filters = PackedStringArray(["*.wav ; WAV 音频"])
+	_tracks_dlg.file_selected.connect(_start_track_export)
+	add_child(_tracks_dlg)
 
 
 func _mk_label(t: String) -> Label:
@@ -715,7 +727,13 @@ func _on_transport_stopped() -> void:
 		history.push(song)
 		roll.queue_redraw()
 	if _exporting:
-		_finish_export()
+		if _track_export.get("active", false):
+			(_track_export["rec"] as AudioEffectRecord).set_recording_active(false)
+			_save_track_recording(_track_export)
+			_detach_track_recorder(_track_export)
+			_export_next_track()
+		else:
+			_finish_export()
 
 
 ## ── 键盘弹奏 / 录制路由 ────────────────────────────────────────────
@@ -752,8 +770,26 @@ func _unhandled_input(event: InputEvent) -> void:
 			if k.physical_keycode == KEY_Y:
 				_do_redo()
 				return
+			if k.physical_keycode == KEY_C:
+				roll.copy_selection()
+				return
+			if k.physical_keycode == KEY_X:
+				roll.cut_selection()
+				return
+			if k.physical_keycode == KEY_V:
+				roll.paste_at_playhead()
+				return
+			if k.physical_keycode == KEY_A:
+				roll.select_all()
+				return
 			return  # 其余 Ctrl 组合不当作弹奏
 		if k.ctrl_pressed or k.meta_pressed:
+			return
+		if k.physical_keycode == KEY_DELETE and k.pressed and not k.echo:
+			roll.delete_selection()
+			return
+		if k.physical_keycode == KEY_ESCAPE and k.pressed and not k.echo:
+			roll.clear_selection()
 			return
 		var semi: int = NoteKeys.KEY_TO_SEMI.get(k.physical_keycode, -1)
 		if semi < 0:
@@ -912,6 +948,42 @@ func _on_zoom_out() -> void:
 
 func _update_zoom_lab() -> void:
 	_zoom_lab.text = "%d%%" % int(round(roll.px_per_tick / 10.0 * 100.0))
+
+
+## ── 卷帘选区浮动操作栏（v0.2.1） ───────────────────────────────────
+
+var _sel_bar: PanelContainer
+
+
+func _build_sel_bar() -> PanelContainer:
+	_sel_bar = PanelContainer.new()
+	_sel_bar.add_theme_stylebox_override("panel", _panel_style(COL_PANEL_BG, COL_BORDER, 6,
+			Vector2(8, 3), Vector2(8, 5)))
+	_sel_bar.visible = false
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 4)
+	var cap := Label.new()
+	cap.text = "选区"
+	cap.add_theme_font_size_override("font_size", 10)
+	cap.add_theme_color_override("font_color", COL_TEXT_DIM)
+	h.add_child(cap)
+	h.add_child(_mk_button("量化", func() -> void: roll.quantize_selection()))
+	h.add_child(_mk_button("♭", func() -> void: roll.transpose_selection(-1)))
+	h.add_child(_mk_button("♯", func() -> void: roll.transpose_selection(1)))
+	h.add_child(_mk_button("力度−", func() -> void: roll.nudge_selection_velocity(-0.1)))
+	h.add_child(_mk_button("力度+", func() -> void: roll.nudge_selection_velocity(0.1)))
+	h.add_child(_mk_button("复制", func() -> void: roll.copy_selection()))
+	h.add_child(_mk_button("剪切", func() -> void: roll.cut_selection()))
+	h.add_child(_mk_button("粘贴到播放头", func() -> void: roll.paste_at_playhead()))
+	h.add_child(_mk_button("删除", func() -> void: roll.delete_selection()))
+	h.add_child(_mk_button("取消选择", func() -> void: roll.clear_selection()))
+	_sel_bar.add_child(h)
+	return _sel_bar
+
+
+func _on_selection_changed(has_sel: bool) -> void:
+	if _sel_bar != null:
+		_sel_bar.visible = has_sel
 
 
 ## ── 轨道列表 / 混音 ─────────────────────────────────────────────────
@@ -1099,6 +1171,87 @@ func _on_wav_path(path: String) -> void:
 	var rec: AudioStreamWAV = _wav_dlg.get_meta("rec")
 	var err := rec.save_to_wav(path)
 	_update_status("WAV 已导出：%s" % path if err == OK else "WAV 导出失败（%d）" % err)
+
+
+## ── 分轨导出（逐轨独奏实时录制总线；导出期间临时改混音，结束恢复） ──
+
+func _on_export_tracks() -> void:
+	if _exporting:
+		_update_status("导出进行中，请先等待完成")
+		return
+	_tracks_dlg.current_file = "分轨.wav"
+	_tracks_dlg.popup_centered(Vector2i(720, 480))
+
+
+func _start_track_export(base_path: String) -> void:
+	if _exporting or transport.playing:
+		return
+	_track_export = {
+		"active": true,
+		"queue": range(song.tracks.size()),
+		"base": base_path.get_basename(),
+		"rec_bus": -1,
+		"saved_mutes": song.tracks.map(func(t: Dictionary) -> bool: return t.get("mute", false)),
+		"saved_loop": transport.loop_play,
+		"rec": AudioEffectRecord.new(),
+	}
+	_exporting = true
+	transport.loop_play = false
+	_export_btn.text = "分轨中…"
+	_export_next_track()
+
+
+func _export_next_track() -> void:
+	var st: Dictionary = _track_export
+	if st["queue"].is_empty():
+		_finish_track_export()
+		return
+	var i: int = st["queue"].pop_front()
+	st["current"] = i
+	# 录制器挂到该轨总线（上一轨已由 stopped 回调保存并摘除）
+	var bus := AudioServer.get_bus_index(Synth.track_bus_name(i))
+	AudioServer.add_bus_effect(bus, st["rec"])
+	st["rec_bus"] = bus
+	st["rec_pos"] = AudioServer.get_bus_effect_count(bus) - 1
+	# 独占该轨：其余轨临时静音（导出结束恢复原 mute 状态）
+	for t in song.tracks.size():
+		song.tracks[t]["mute"] = t != i
+	Synth.apply_mix(song.tracks)
+	st["rec"].set_recording_active(true)
+	transport.play(0.0)
+	_update_status("分轨导出：第 %d/%d 轨《%s》…" % [i + 1, song.tracks.size(), song.tracks[i]["name"]])
+
+
+func _save_track_recording(st: Dictionary) -> void:
+	var rec: AudioStreamWAV = st["rec"].get_recording()
+	if rec == null or rec.data.is_empty():
+		return
+	var i: int = st["current"]
+	var raw: String = song.tracks[i]["name"]
+	for bad in ["\\", "/", ":", "*", "?", "\"", "<", ">", "|"]:
+		raw = raw.replace(bad, "_")
+	rec.save_to_wav("%s_%02d_%s.wav" % [st["base"], i + 1, raw])
+
+
+## 从轨道总线摘下录制器
+func _detach_track_recorder(st: Dictionary) -> void:
+	if st.get("rec_bus", -1) >= 0:
+		AudioServer.remove_bus_effect(st["rec_bus"], st["rec_pos"])
+		st["rec_bus"] = -1
+
+
+func _finish_track_export() -> void:
+	var st: Dictionary = _track_export
+	if st.get("rec_bus", -1) >= 0:
+		AudioServer.remove_bus_effect(st["rec_bus"], st["rec_pos"])
+	for t in song.tracks.size():
+		song.tracks[t]["mute"] = st["saved_mutes"][t]
+	transport.loop_play = st["saved_loop"]
+	Synth.apply_mix(song.tracks)
+	_track_export = {}
+	_exporting = false
+	_export_btn.text = "导出WAV"
+	_update_status("分轨导出完成：%s_轨号_轨名.wav" % st["base"])
 
 
 ## ── 状态栏 ─────────────────────────────────────────────────────────
