@@ -27,3 +27,6 @@ Thumbs.db
 *.swp
 *.bak
 *.tmp
+
+# 诊断脚本现场产物（见 tools/diag_overlay.ps1）
+tools/diag_result/

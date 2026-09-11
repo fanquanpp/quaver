@@ -358,3 +358,11 @@ res://
 **SFZ 采样音源**（SfzLoader）：扫描 user://sfz/*.sfz 注册为 "sfz:文件名" 音色。支持 SFZ v1 常用子集：sample/key/pitch_keycenter/lokey/hikey/lovel/hivel，<group> 默认值、行内多 opcode、// 注释；WAV 经 AudioStreamWAV.load_from_file 直接读取，pitch_keycenter 定移调基准、lovel/hivel 参与力度选区。**SF2（二进制 RIFF 采样库）解析器如实延期**——需独立的 RIFF/sample chunk 解析与压缩格式（如 cwsdram/24bit 打包）支持，工作量与测试面不在 v1.0 收口范围内，待有真实 SF2 资产需求时重估（Clef Midi 插件路线亦保留观察）。
 
 **测试**：smoke_v100（插件注册/去重/力度层、SFZ 双 region 解析+移调比、混音台刷新）；六套件全过。
+
+## 22. 附：外部悬浮物误报排查规程（2026-09-12 更新）
+
+「游戏画面出现红色覆盖 / 点击特效 / 猫形贴纸」类报告，**先查外部悬浮层再查代码**。本作界面全部为程序内矢量绘制，演奏页不存在任何红色绘制路径；v0.1.4 与 v1.0.0 两次同类现象的排查结论：
+
+- **v0.1.4 一次**：曾定位为网易云音乐「桌面歌词」悬浮窗（cloudmusic.exe）。
+- **v1.0.0 这次复现时 cloudmusic 并未运行**——说明诱因不止一个，凡"跟随光标的点击特效/桌宠/悬浮层"皆可造成。本次实测证据：① 新启动游戏 + 交互，画面完全正常（内部渲染排除）；② 异常截图像素分析 = 约 50% 透明度的鲑红色半透明层叠在**正确渲染的游戏像素之上**（外部合成特征，颜色接近 Material Red A100 #ff8a80）；③ 异常物（白色猫形贴纸 + 青色箭头）出现在光标尖端且**没有对应的顶层 HWND**——系无窗口的合成层（DirectComposition/驱动级桌宠或输入法皮肤类），瞬态出现，常规 EnumWindows 抓不到。本机常驻的 Wallpaper Engine、UU 远程（gvInput 虚拟输入驱动）等均有嫌疑，具体元凶待下一次出现时用诊断脚本现场锁定。
+- **新增诊断脚本 `tools/diag_overlay.ps1`**：异常出现时运行，自动保存全屏截图 + 全部可见窗口清单（含分层/置顶/工具窗标志 + 进程路径）+ 光标信息到 `tools/diag_result/`，对照即可锁定元凶进程。
