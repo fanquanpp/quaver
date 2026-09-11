@@ -21,7 +21,7 @@ Out of scope by design: vocals/lyrics, MIDI hardware, VST/AU hosting, cloud coll
 
 ## Highlights
 
-- **Play mode** — on-screen piano mapped to two keyboard rows (keycaps printed on the keys), scale-highlighting so out-of-key notes dim, one-key chord mode, rising "note echo" animation
+- **Play mode** — on-screen piano mapped to two keyboard rows (keycaps printed on the keys), scale-highlighting so out-of-key notes dim, one-key chord mode, **freeze mode** (latch notes one by one so 3+ notes ring together — beats the 2-3-key hardware rollover limit), rising "note echo" animation
 - **Arrange mode** — up to **16 tracks** with a track list (instrument / mute / solo / volume / pan), piano roll with multi-select & box select, batch quantize/transpose/velocity, velocity lane, clipboard, ghost notes, and a **16-step × 6-voice drum step sequencer**
 - **Audio engine** — per-track buses routed through Music/Drum group buses into a Master bus (EQ10 + Limiter), per-track reverb/delay sends, audio-clock-anchored transport with look-ahead scheduling
 - **Soundset** — 8 built-in synthesized instruments with 3 velocity layers each (Piano / Chiptune / Pad / Bass / E-Piano / Music Box / Drum Kit…), synthesized at startup, cached to disk, zero realtime DSP

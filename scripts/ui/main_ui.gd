@@ -34,6 +34,8 @@ var tabs: TabContainer
 
 var _sel_track := 0
 var _chord_mode := false
+var _freeze_mode := false
+var _latched := {}       # 冻结模式：midi -> true（按下的音保持"按住"，构建多键和弦）
 var _held := {}          # midi -> true（电脑键盘按住）
 var _rec_pending := {}   # midi -> note（录制中的音符）
 
@@ -57,6 +59,7 @@ var _scale_chk: CheckButton
 var _key_opt: OptionButton
 var _mode_opt: OptionButton
 var _chord_chk: CheckButton
+var _freeze_chk: CheckButton
 var _labels_chk: CheckButton
 var _snap_opt: OptionButton
 var _len_spin: SpinBox
@@ -383,9 +386,11 @@ func _build_options() -> Control:
 	_mode_opt.item_selected.connect(func(_i: int) -> void: _on_scale_picked())
 	_chord_chk = _mk_check("和弦", false, func(on: bool) -> void: _chord_mode = on)
 	_chord_chk.tooltip_text = "和弦模式：按一个键自动补齐调内三和弦"
+	_freeze_chk = _mk_check("冻结", false, _on_freeze_toggled)
+	_freeze_chk.tooltip_text = "冻结模式（解决键盘 2-3 键硬件限制）：依次按下的音保持冻结，按新键时已冻结的音一起再响 = 多音同奏；再按已冻结的键解除该音；关闭开关解除全部"
 	_labels_chk = _mk_check("键帽", true, _on_labels_toggled)
 	_labels_chk.tooltip_text = "在琴键上显示电脑键帽字母"
-	flow.add_child(_group("辅助", [_scale_chk, _key_opt, _mode_opt, _chord_chk, _labels_chk]))
+	flow.add_child(_group("辅助", [_scale_chk, _key_opt, _mode_opt, _chord_chk, _freeze_chk, _labels_chk]))
 
 	_undo_btn = _mk_button("撤销", _do_undo)
 	_undo_btn.tooltip_text = "撤销（快捷键 Ctrl+Z）"
@@ -449,7 +454,7 @@ func _build_tabs(parent: Control) -> void:
 	play.name = "演奏"
 	play.add_theme_constant_override("separation", GAP_Y)
 	var hint := Label.new()
-	hint.text = "电脑键盘 = 琴键：Z 行低八度 · Q 行高八度（键帽字母印在琴键上）· ↑/↓ 切换八度 · 鼠标点击/滑奏可弹 · 「和弦模式」按一键出整个和弦 · 空格=播放/停止 · Ctrl+Z 撤销 / Ctrl+Y 重做 · 键盘上 Ctrl+滚轮缩放　　提示：同按多个键受键盘硬件限制（普通键盘仅 2-6 键防串扰），和弦请用「和弦模式」或鼠标滑奏"
+	hint.text = "电脑键盘 = 琴键：Z 行低八度 · Q 行高八度（键帽字母印在琴键上）· ↑/↓ 切换八度 · 鼠标点击/滑奏可弹 · 「和弦模式」按一键出整个和弦 · 「冻结模式」依次按下的音保持冻结、按新键全体齐鸣（破解键盘只能同按 2-3 键的硬件限制）· 空格=播放/停止 · Ctrl+Z 撤销 / Ctrl+Y 重做 · 键盘上 Ctrl+滚轮缩放　　提示：同按多个键受键盘硬件限制（普通键盘仅 2-6 键防串扰），多音同奏请用「和弦模式」「冻结模式」或鼠标滑奏"
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.add_theme_font_size_override("font_size", 12)
 	hint.custom_minimum_size = Vector2(0, 42)
@@ -875,10 +880,23 @@ func _shift_octave(dir: int) -> void:
 	keyboard.queue_redraw()
 
 
-## 弹奏（键盘/鼠标共用）：按轨发声 + 和弦模式 + 录制（两个键盘同步按压动画）
+## 弹奏（键盘/鼠标共用）：按轨发声 + 冻结/和弦模式 + 录制（两个键盘同步按压动画）
 func _live_note_on(midi: int) -> void:
 	var inst: String = song.tracks[_sel_track]["instrument"]
+	# 冻结模式：再按已冻结的键 = 解除该音（不发声）
+	if _freeze_mode and _latched.has(midi):
+		_latched.erase(midi)
+		for kb in _all_keyboards():
+			kb.set_pressed_silent(midi, false)
+		_rain.note_lift(midi)
+		_finalize_rec_note(midi)
+		return
 	Synth.play_note_on_track(_sel_track, inst, midi, 0.85)
+	# 冻结模式：本音进入冻结集；已冻结的音随新音一起再响（等效多键同按）
+	if _freeze_mode:
+		for l in _latched:
+			Synth.play_note_on_track(_sel_track, inst, l, 0.6)
+		_latched[midi] = true
 	_rain.note_hit(midi, SongModel.TRACK_COLORS[song.tracks[_sel_track]["color"] % SongModel.TRACK_COLORS.size()])
 	if _chord_mode:
 		for c in Theory.scale_chord(midi, _key_root(), _scale_semis()):
@@ -895,17 +913,41 @@ func _live_note_on(midi: int) -> void:
 
 
 func _live_note_off(midi: int) -> void:
+	# 冻结模式：冻结中的键抬起不松（保持和弦）
+	if _freeze_mode and _latched.has(midi):
+		return
 	for kb in _all_keyboards():
 		kb.set_pressed_silent(midi, false)
 	_rain.note_lift(midi)
-	if _rec_pending.has(midi):
-		var n: Dictionary = _rec_pending[midi]
-		_rec_pending.erase(midi)
-		var end_tick := _snap_tick(transport.playhead)
-		n["l"] = maxi(end_tick - n["s"], 1)
-		history.push(song)
-		transport.refresh()
-		roll.queue_redraw()
+	_finalize_rec_note(midi)
+
+
+## 录制中的音符定长（冻结解除/正常抬起共用）
+func _finalize_rec_note(midi: int) -> void:
+	if not _rec_pending.has(midi):
+		return
+	var n: Dictionary = _rec_pending[midi]
+	_rec_pending.erase(midi)
+	var end_tick := _snap_tick(transport.playhead)
+	n["l"] = maxi(end_tick - n["s"], 1)
+	history.push(song)
+	transport.refresh()
+	roll.queue_redraw()
+
+
+## 冻结开关：关闭时解除全部冻结音
+func _on_freeze_toggled(on: bool) -> void:
+	_freeze_mode = on
+	if on:
+		_update_status("冻结模式开：依次按键逐个冻结，按新键时全体齐鸣；再按已冻结的键解除")
+		return
+	for midi in _latched:
+		for kb in _all_keyboards():
+			kb.set_pressed_silent(midi, false)
+		_rain.note_lift(midi)
+		_finalize_rec_note(midi)
+	_latched.clear()
+	_update_status("冻结模式关")
 
 
 func _all_keyboards() -> Array:

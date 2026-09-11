@@ -24,6 +24,7 @@ func _run() -> void:
 	_test_synth_grab()
 	_test_analysis_stats()
 	await _test_ui_playback()
+	await _test_freeze_latch()
 	await _test_ui_wiring()
 
 	if _fails.is_empty():
@@ -271,6 +272,37 @@ func _test_synth_grab() -> void:
 		Synth._start_ms[i] = now - 10  # 全部刚起音 <80ms：仍必须返回有效声部
 	_check(Synth._grab() >= 0, "极端连击下也必须有声部可用")
 	Synth.stop_all()
+
+
+## ── 6.5) 冻结模式（破解键盘 2-3 键硬件限制） ───────────────────────
+
+func _test_freeze_latch() -> void:
+	if not InstrumentBank.ready_ok:
+		await InstrumentBank.bank_ready
+	var ps: PackedScene = load("res://scenes/main.tscn")
+	var ui: Control = ps.instantiate()
+	add_child(ui)
+	for i in 3:
+		await get_tree().process_frame
+	ui._switch_song(SongModel.make_demo())
+	# 开冻结：依次按下三个音 → 全部保持冻结
+	ui._freeze_chk.set_pressed(true)
+	await get_tree().process_frame
+	ui._live_note_on(60)
+	ui._live_note_on(64)
+	ui._live_note_on(67)
+	_check(ui._latched.size() == 3, "冻结模式应锁住 3 个音（实际 %d）" % ui._latched.size())
+	# 抬起不松（和弦保持）
+	ui._live_note_off(60)
+	_check(ui._latched.size() == 3, "冻结中的音抬起不应解除")
+	# 再按已冻结的键 = 解除该音
+	ui._live_note_on(60)
+	_check(ui._latched.size() == 2, "再按已冻结的键应解除（实际 %d）" % ui._latched.size())
+	# 关闭开关 = 解除全部
+	ui._freeze_chk.set_pressed(false)
+	await get_tree().process_frame
+	_check(ui._latched.is_empty(), "关闭冻结应解除全部冻结音")
+	ui.queue_free()
 
 
 ## ── 7) UI 接线（撤销按钮 / 循环区同步 / MIDI 菜单存在） ────────────
