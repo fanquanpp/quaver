@@ -30,3 +30,15 @@ Thumbs.db
 
 # 诊断脚本现场产物（见 tools/diag_overlay.ps1）
 tools/diag_result/
+
+# ── Godot 本地敏感/覆盖文件 ────────────────────────────────────
+# 编辑器本地覆盖（窗口位置等，不入库）
+override.ini
+# 导出凭据（密钥/签名配置，绝不入库）
+export_credentials.cfg
+
+# ── 其他工具链 ──────────────────────────────────────────────
+# TS 依赖（gode 自带运行时，一般用不到）
+node_modules/
+# 日志
+*.log
