@@ -588,6 +588,8 @@ func _build_tabs(parent: Control) -> void:
 	analysis.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	analysis.apply_key.connect(_on_apply_detected_key)
 	ana.add_child(analysis)
+	tabs.add_child(ana)
+
 	# ── 混音页（v1.0.0 混音台工作区） ──
 	var mix_page := VBoxContainer.new()
 	mix_page.name = "混音"

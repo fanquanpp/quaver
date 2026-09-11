@@ -314,6 +314,12 @@ func _test_ui_wiring() -> void:
 	for i in 5:
 		await get_tree().process_frame
 	_check(ui.history is EditHistory, "history 未初始化")
+	# 四个标签页齐全且都在树内（防 v1.0.0 分析页漏挂回归）
+	_check(ui.tabs.get_tab_count() == 4,
+			"应有 4 个标签页（实际 %d）" % ui.tabs.get_tab_count())
+	_check(ui.analysis != null and ui.analysis.is_inside_tree() and ui.analysis.is_node_ready(),
+			"分析页应在树内且已就绪")
+	_check(ui.mixer != null and ui.mixer.is_inside_tree(), "混音台应在树内")
 	_check(ui._undo_btn.disabled and ui._redo_btn.disabled, "初始应不可撤销/重做")
 	# 模拟一次编辑 → 按钮状态更新 → 撤销还原
 	var n0: int = ui.song.track_notes(0).size()
