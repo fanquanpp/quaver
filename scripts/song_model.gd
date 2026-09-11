@@ -272,7 +272,7 @@ static func make_demo() -> SongModel:
 			var tones: Array = chords[parts[h]]
 			var t0: int = bar * 16 + h * 8
 			# 单和弦小节音型走两遍，双和弦各占半小节一遍
-			for rep in 2 / parts.size():
+			for rep in (2 if parts.size() == 1 else 1):
 				for step in 4:
 					s.add_note(1, tones[step % 4], t0 + (rep * 4 + step) * 2, 2, 0.45)
 	return s

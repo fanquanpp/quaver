@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Godot](https://img.shields.io/badge/Godot-4.7-478cbf)
 ![Platform](https://img.shields.io/badge/Platform-Windows-blue)
-![Version](https://img.shields.io/badge/Version-1.0.2-4fc3f7)
+![Version](https://img.shields.io/badge/Version-1.0.3-4fc3f7)
 
 [中文](README.md) · [English](README.en.md)
 
@@ -21,7 +21,7 @@ Out of scope by design: vocals/lyrics, MIDI hardware, VST/AU hosting, cloud coll
 
 ## Highlights
 
-- **Play mode** — on-screen piano mapped to two keyboard rows (keycaps printed on the keys), scale-highlighting so out-of-key notes dim, one-key chord mode, **freeze mode** (latch notes one by one so 3+ notes ring together — beats the 2-3-key hardware rollover limit), rising "note echo" animation
+- **Play mode** — on-screen piano mapped to two keyboard rows (keycaps printed on the keys), scale-highlighting so out-of-key notes dim, switch tracks & instrument timbres right from the play page (instant preview on switch), one-key chord mode, **freeze mode** (latch notes one by one so 3+ notes ring together — beats the 2-3-key hardware rollover limit), rising "note echo" animation
 - **Arrange mode** — up to **16 tracks** with a track list (instrument / mute / solo / volume / pan), piano roll with multi-select & box select, batch quantize/transpose/velocity, velocity lane, clipboard, ghost notes, and a **16-step × 6-voice drum step sequencer**
 - **Audio engine** — per-track buses routed through Music/Drum group buses into a Master bus (EQ10 + Limiter), per-track reverb/delay sends, audio-clock-anchored transport with look-ahead scheduling
 - **Soundset** — 8 built-in synthesized instruments with 3 velocity layers each (Piano / Chiptune / Pad / Bass / E-Piano / Music Box / Drum Kit…), synthesized at startup, cached to disk, zero realtime DSP
@@ -34,7 +34,7 @@ Out of scope by design: vocals/lyrics, MIDI hardware, VST/AU hosting, cloud coll
 
 1. Install [Godot 4.7+](https://godotengine.org/download) (standard build, no .NET needed)
 2. Clone this repo and open `project.godot` in Godot
-3. Press F5 — a *Twinkle Twinkle Little Star* demo project loads on first run
+3. Press F5 — a full *Chong Er Fei* (Fireflies Fly) demo arrangement loads on first run (32 bars: music-box melody + piano arpeggios, intro / verse ×2 / chorus)
 
 **Keys**: `Z`-row = lower octave, `Q`-row = upper octave, `↑`/`↓` shift octaves, `Space` = play/stop, `=`/`-` = zoom the piano roll, `Ctrl+Z`/`Ctrl+Y` = undo/redo. Mouse plays too (click keys, drag to glissando).
 
@@ -44,7 +44,7 @@ Out of scope by design: vocals/lyrics, MIDI hardware, VST/AU hosting, cloud coll
 
 Full design document (requirements, audio engine, language choices, per-version iteration records): [DESIGN.md](DESIGN.md) · 中文说明：[README.md](README.md)
 
-**Tests**: six headless smoke suites in `tests/` — run with `godot --headless --path . res://tests/smoke_v100.tscn`
+**Tests**: five headless smoke suites in `tests/` — run with `godot --headless --path . res://tests/smoke_v100.tscn`
 
 ## Roadmap
 
@@ -55,6 +55,7 @@ Full design document (requirements, audio engine, language choices, per-version 
 - [x] v0.3.0 chord detection / section analysis / harmony suggestions
 - [x] v0.3.1 track presets / custom GM mapping
 - [x] v1.0.0 mixer workspace / instrument plugin system / SFZ support
+- [x] v1.0.1–v1.0.3 freeze (latch) mode / play-page instrument switcher / toolbar rework / full *Chong Er Fei* demo / hi-res pixel icons
 - [ ] v1.x realtime synth engine (GDExtension) · SF2 sample banks
 
 ## License

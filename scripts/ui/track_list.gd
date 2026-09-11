@@ -83,6 +83,8 @@ func _build_row(i: int) -> PanelContainer:
 	var trk: Dictionary = song.tracks[i]
 	var selected := i == sel
 	var row := PanelContainer.new()
+	# 行高显式定值：ScrollContainer 内控件最小高度传播不可靠，交给显式约束
+	row.custom_minimum_size = Vector2(0, 34)
 	row.add_theme_stylebox_override("panel", _style(
 			Color("313846") if selected else COL_PANEL_BG,
 			COL_BORDER_HI if selected else COL_BORDER))
@@ -178,6 +180,7 @@ func _build_row(i: int) -> PanelContainer:
 	pan.drag_ended.connect(func(_changed: bool) -> void: mix_changed.emit(true))
 	pan.tooltip_text = "声像（左-右）"
 	h.add_child(pan)
+	row.add_child(h)  # v0.2.0 起缺失：行内容从未挂进容器，轨道列表一直是空壳
 	return row
 
 
