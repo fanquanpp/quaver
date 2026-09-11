@@ -9,7 +9,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Godot](https://img.shields.io/badge/Godot-4.7-478cbf)
 ![Platform](https://img.shields.io/badge/Platform-Windows-blue)
-![Version](https://img.shields.io/badge/Version-1.0.0-4fc3f7)
+![Version](https://img.shields.io/badge/Version-1.0.1-4fc3f7)
 
 [中文](README.md) · [English](README.en.md)
 
