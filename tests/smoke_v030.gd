@@ -30,23 +30,29 @@ func _check(cond: bool, msg: String) -> void:
 		_fails.append(msg)
 
 
-## 示范曲伴奏：每小节和弦 C C F C C G C G C C F C（大调）
+## 示范曲（虫儿飞完整改编 32 小节）：前奏全 C；主歌 C G Am Em | F|G×3 Am|G（连接 Am）；
+## 副歌 Am|Em C G Am|F G F|G C|Am Dm|F×2 C|G C。半小节双和弦会混检出 Dm/Gsus4 等
+## 混合名（属预期）；G 三和弦叠旋律高音 E 时检出 Em7（G6/Em7 歧义，正常和声现象）。
 func _test_chord_detection() -> void:
 	var s := SongModel.make_demo()
 	var chords := SongAnalysis.detect_chords(s)
-	_check(chords.size() == 12, "12 小节应有 12 个检测结果（实际 %d）" % chords.size())
-	_check(chords[0]["name"] == "C", "第 1 小节应为 C（实际 %s）" % chords[0]["name"])
-	_check(chords[2]["name"] == "F", "第 3 小节应为 F（实际 %s）" % chords[2]["name"])
-	_check(chords[5]["name"] == "G", "第 6 小节应为 G（实际 %s）" % chords[5]["name"])
+	_check(chords.size() == 32, "32 小节应有 32 个检测结果（实际 %d）" % chords.size())
+	_check(chords[0]["name"] == "C", "前奏小节应为 C（实际 %s）" % chords[0]["name"])
+	var b6: String = chords[5]["name"]
+	_check(b6 == "G" or b6 == "Em7", "第 6 小节应为 G 或 Em7 歧义（实际 %s）" % b6)
+	_check(chords[6]["name"] == "Am", "第 7 小节应为 Am（实际 %s）" % chords[6]["name"])
+	_check(chords[7]["name"] == "Em", "第 8 小节应为 Em（实际 %s）" % chords[7]["name"])
 
 
 func _test_roman_numerals() -> void:
 	var s := SongModel.make_demo()
 	var chords := SongAnalysis.detect_chords(s, 0, false)  # C 大调
 	_check(chords[0]["roman"] == "I", "C 应为 I 级（实际 %s）" % chords[0]["roman"])
-	_check(chords[2]["roman"] == "IV", "F 应为 IV 级（实际 %s）" % chords[2]["roman"])
-	_check(chords[5]["roman"] == "V", "G 应为 V 级（实际 %s）" % chords[5]["roman"])
-	_check(chords[9]["roman"] == "I" or chords[9]["roman"] == "vi", "C6/Am7 歧义应判 I 或 vi（实际 %s）" % chords[9]["roman"])
+	var b6r: String = chords[5]["roman"]
+	_check(b6r == "V" or b6r == "iii", "G/Em7 歧义应为 V 或 iii 级（实际 %s）" % b6r)
+	_check(chords[6]["roman"] == "vi", "Am 应为 vi 级（实际 %s）" % chords[6]["roman"])
+	_check(chords[7]["roman"] == "iii", "Em 应为 iii 级（实际 %s）" % chords[7]["roman"])
+	_check(chords[23]["roman"] == "V", "副歌 G 应为 V 级（实际 %s）" % chords[23]["roman"])
 
 
 func _test_sections() -> void:
@@ -58,7 +64,7 @@ func _test_sections() -> void:
 	var covered := 0
 	for sec in secs:
 		covered += sec["end_bar"] - sec["start_bar"]
-	_check(covered == 12, "段落应覆盖全部 12 小节（实际 %d）" % covered)
+	_check(covered == 32, "段落应覆盖全部 32 小节（实际 %d）" % covered)
 	# 空工程不崩
 	var e := SongModel.new()
 	e.tracks[0]["notes"].clear()
@@ -74,9 +80,9 @@ func _test_suggestions() -> void:
 	var roots := {}
 	for g in sugg:
 		roots[g["name"]] = true
-	# 示范曲结束在 F（IV 级）→ 候选应含 V 或 I
-	var ok := roots.has("G") or roots.has("C")
-	_check(ok, "IV 级后的候选应含 V/I（实际 %s）" % str(roots.keys()))
+	# 示范曲结束在 C（I 级）→ 候选应含 IV（F）或 V（G）
+	var ok := roots.has("G") or roots.has("F")
+	_check(ok, "I 级后的候选应含 V/IV（实际 %s）" % str(roots.keys()))
 	# V 级之后的建议应指向 I
 	var v_next := SongAnalysis.suggest_next_chords(
 			[{"bar": 0, "root": 7, "quality": "", "name": "G", "roman": "V", "score": 1.0}],

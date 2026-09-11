@@ -160,7 +160,7 @@ func _test_history_mix_snapshot() -> void:
 	h.push(s)
 	h.undo(s)
 	_check(s.tracks[0]["mute"] == false, "撤销应还原 mute")
-	_check(s.tracks[0]["instrument"] == "钢琴", "撤销应还原音色")
+	_check(s.tracks[0]["instrument"] == "八音盒", "撤销应还原音色")  # 虫儿飞示范曲第 1 轨默认八音盒
 
 
 ## ── 6) 力度分层 ────────────────────────────────────────────────────

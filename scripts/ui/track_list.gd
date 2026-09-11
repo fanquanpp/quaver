@@ -40,8 +40,14 @@ func _ready() -> void:
 
 	_rows_box = VBoxContainer.new()
 	_rows_box.add_theme_constant_override("separation", 2)
-	_rows_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	add_child(_rows_box)
+	_rows_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_rows_box.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	# 竖向滚动：轨道多 / 窗口矮时不裁切（自适应）
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.add_child(_rows_box)
+	add_child(scroll)
 
 	var add_btn := Button.new()
 	add_btn.text = "+ 添加轨道"
@@ -123,8 +129,9 @@ func _build_row(i: int) -> PanelContainer:
 			inst_opt.add_item(inst)
 		inst_opt.focus_mode = Control.FOCUS_NONE
 		inst_opt.select(InstrumentBank.instruments.find(trk["instrument"]))
-		inst_opt.custom_minimum_size = Vector2(52, 0)
+		inst_opt.custom_minimum_size = Vector2(64, 0)
 		inst_opt.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		inst_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL  # 吃掉行内剩余宽度，音色名不再截断
 		inst_opt.item_selected.connect(func(j: int) -> void:
 			trk["instrument"] = InstrumentBank.instruments[j]
 			mix_changed.emit(true))

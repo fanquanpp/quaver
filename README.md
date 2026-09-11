@@ -9,7 +9,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Godot](https://img.shields.io/badge/Godot-4.7-478cbf)
 ![Platform](https://img.shields.io/badge/Platform-Windows-blue)
-![Version](https://img.shields.io/badge/Version-1.0.2-4fc3f7)
+![Version](https://img.shields.io/badge/Version-1.0.3-4fc3f7)
 
 [中文](README.md) · [English](README.en.md)
 
@@ -85,7 +85,7 @@
 
 1. 安装 [Godot 4.7+](https://godotengine.org/download)（标准版即可，无需 .NET）
 2. 克隆本仓库，用 Godot 打开 `project.godot`
-3. 按 F5 运行 —— 首次启动自带《小星星》示范曲
+3. 按 F5 运行 —— 首次启动自带《虫儿飞》示范曲（双轨：八音盒旋律 + 钢琴和弦）
 
 ### 弹奏键位
 
@@ -188,6 +188,7 @@
 - [x] v0.3.0 和弦进行检测 / 曲式分段 / 智能建议
 - [x] v0.3.1 轨道预设 / MIDI 自定义映射
 - [x] v1.0.0 混音台工作区 / 音色插件系统 / SFZ 采样音源
+- [x] v1.0.1–v1.0.3 冻结（锁音）模式 / 演奏页音色切换 / 工具栏重排 / 《虫儿飞》完整示范曲 / 高精度图标
 - [ ] v1.x 实时合成引擎（GDExtension）· SF2 采样库 · 按需重估
 
 ## 协议

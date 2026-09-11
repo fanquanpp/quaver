@@ -63,7 +63,7 @@ func _test_edit_history() -> void:
 	var restored: Dictionary = s.track_notes(0)[0]
 	restored["p"] = 99
 	h.undo(s)
-	_check(s.track_notes(0)[0]["p"] == 60, "历史快照不应被活模型污染")
+	_check(s.track_notes(0)[0]["p"] == 76, "历史快照不应被活模型污染")  # 虫儿飞前奏首音 E5
 	h.redo(s)
 
 
@@ -168,7 +168,7 @@ func _test_transport_no_loop_stops_at_end() -> void:
 
 func _test_analysis_stats() -> void:
 	var a := SongAnalysis.analyze(SongModel.make_demo())
-	_check(a["note_count"] == 78, "示范曲应 78 音符（实际 %d）" % a["note_count"])
+	_check(a["note_count"] == 352, "示范曲应 352 音符（实际 %d）" % a["note_count"])
 	_check(a["key"]["root"] == 0 and not a["key"]["minor"], "调性检测应 C 大调")
 	_check(a["max_poly"] >= 3, "最大同时音应 ≥3")
 	_check(a["dur_secs"] > 0.0, "曲长应 > 0")
@@ -209,7 +209,7 @@ func _test_sheet_music() -> void:
 	var x := XMLParser.new()
 	_check(x.open_buffer(xml.to_utf8_buffer()) == OK, "MusicXML 不是合法 XML")
 	var parts := 0
-	var chord_cnt := 0
+	var measure_cnt := 0
 	var per_minute := 0
 	var cur_part := 0
 	while x.read() == OK:
@@ -218,8 +218,8 @@ func _test_sheet_music() -> void:
 		match x.get_node_name():
 			"score-part":
 				parts += 1
-			"chord":
-				chord_cnt += 1
+			"measure":
+				measure_cnt += 1
 			"per-minute":
 				if x.read() == OK and x.get_node_type() == XMLParser.NODE_TEXT:
 					per_minute = int(x.get_node_data().strip_edges())
@@ -227,7 +227,7 @@ func _test_sheet_music() -> void:
 				if not x.is_empty():
 					cur_part += 1
 	_check(parts == 2, "MusicXML 应有 2 个声部，实际 %d" % parts)
-	_check(chord_cnt == 24, "伴奏 12 组三和弦应有 24 个 <chord/>，实际 %d" % chord_cnt)
+	_check(measure_cnt == 64, "2 声部 × 32 小节应有 64 个 <measure>，实际 %d" % measure_cnt)
 	_check(per_minute == 96, "速度元信息应为 96，实际 %d" % per_minute)
 	var err := SheetMusic.export_song(demo, "user://test_score.musicxml")
 	_check(err == OK, "MusicXML 落盘失败（%d）" % err)

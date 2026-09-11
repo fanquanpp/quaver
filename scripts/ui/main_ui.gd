@@ -65,12 +65,17 @@ var _snap_opt: OptionButton
 var _len_spin: SpinBox
 var _kb_scale: HSlider
 var _kb_span: OptionButton
+var _play_track_opt: OptionButton   # 演奏页：当前轨道
+var _play_inst_opt: OptionButton    # 演奏页：当前轨音色
+var _syncing_play_ui := false       # 防止 UI 同步回调把用户改动写回工程
 var track_list: TrackList
 var drum_seq: DrumSequencer
 var mixer: MixerPanel
 var _undo_btn: Button
 var _redo_btn: Button
 var _export_btn: Button
+var _save_btn: Button
+var _open_btn: Button
 
 var _hbar: HScrollBar
 var _vbar: VScrollBar
@@ -175,7 +180,7 @@ func _icon(i: int) -> Texture2D:
 		return null
 	var t := AtlasTexture.new()
 	t.atlas = _icons_tex
-	t.region = Rect2(i * 32, 0, 32, 32)
+	t.region = Rect2(i * 40, 0, 40, 40)
 	return t
 
 
@@ -186,12 +191,17 @@ func _apply_icons() -> void:
 	_stop_btn.icon = _icon(1)
 	_rec_btn.icon = _icon(2)
 	_export_btn.icon = _icon(5)
+	# 图标 3=软盘（保存）/ 4=文件夹（打开），v1.0.3 起接入
+	_save_btn.icon = _icon(3)
+	_open_btn.icon = _icon(4)
 
 
 func _mk_button(text: String, cb: Callable) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.add_theme_constant_override("icon_max_width", 20)
+	# 像素图标 40px 资产 → 20px 显示 = 整数 2:1，NEAREST 保逐像素锐利
+	b.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	b.focus_mode = Control.FOCUS_NONE
 	b.pressed.connect(cb)
 	return b
@@ -222,13 +232,24 @@ func _build_header() -> Control:
 	title.add_theme_font_size_override("font_size", 16)
 	hb.add_child(title)
 
+	# 走带控制固定在顶栏（DAW 惯例：任何标签页都能看到播放状态）
+	var tsep := VSeparator.new()
+	hb.add_child(tsep)
 	_play_btn = _mk_button("播放", _on_play)
 	_play_btn.tooltip_text = "播放（快捷键：空格）"
+	hb.add_child(_play_btn)
 	_stop_btn = _mk_button("停止", _on_stop)
 	_stop_btn.tooltip_text = "停止（再按一次回到开头）"
+	hb.add_child(_stop_btn)
 	_rec_btn = _mk_button("录制", _on_rec_toggle)
 	_rec_btn.toggle_mode = true
 	_rec_btn.tooltip_text = "录制：弹奏自动量化记入当前轨"
+	hb.add_child(_rec_btn)
+	_pos_label = _mk_label("第 1 小节")
+	_pos_label.custom_minimum_size = Vector2(84, 0)
+	_pos_label.add_theme_color_override("font_color", COL_TEXT_DIM)
+	hb.add_child(_pos_label)
+
 	_loop_chk = _mk_check("循环", false, _on_loop_toggle)
 	_loop_chk.tooltip_text = "在循环区间内打转（区间=后面两个小节号，默认整曲）"
 	_loop_a = SpinBox.new()
@@ -272,9 +293,6 @@ func _build_header() -> Control:
 		if analysis != null:
 			analysis.refresh())
 	_bpm_spin.tooltip_text = "速度（拍/分钟）"
-
-	_pos_label = _mk_label("第 1 小节")
-	_pos_label.custom_minimum_size = Vector2(84, 0)
 
 	_status_label = _mk_label("音源载入中…")
 	_status_label.add_theme_font_size_override("font_size", 12)
@@ -367,8 +385,8 @@ func _build_options() -> Control:
 	flow.add_theme_constant_override("h_separation", 8)
 	flow.add_theme_constant_override("v_separation", 4)
 
-	flow.add_child(_group("走带", [_play_btn, _stop_btn, _rec_btn, _loop_chk, _loop_a, _loop_b, _vol_slider]))
-	flow.add_child(_group("速度", [_bpm_spin, _pos_label]))
+	flow.add_child(_group("循环 · 音量", [_loop_chk, _loop_a, _loop_b, _vol_slider]))
+	flow.add_child(_group("速度", [_bpm_spin]))
 
 	_scale_chk = _mk_check("启用", false, _on_scale_toggled)
 	_scale_chk.tooltip_text = "调性辅助：调外键变暗，新手不易弹错"
@@ -420,7 +438,9 @@ func _build_options() -> Control:
 	_zoom_lab.custom_minimum_size = Vector2(44, 0)
 	var zoom_in := _mk_button("+", _on_zoom_in)
 	zoom_in.tooltip_text = "放大（快捷键 =）"
-	flow.add_child(_group("编辑", [_undo_btn, _redo_btn, _snap_opt, _len_spin, _follow_chk, _center_chk, zoom_out, _zoom_lab, zoom_in]))
+	# 编辑/缩放拆成两组：功能组越小越容易扫读（FL Studio 面板原则）
+	flow.add_child(_group("编辑", [_undo_btn, _redo_btn, _snap_opt, _len_spin]))
+	flow.add_child(_group("缩放 · 跟随", [zoom_out, _zoom_lab, zoom_in, _follow_chk, _center_chk]))
 
 	_export_btn = _mk_button("导出WAV", _on_export)
 	_export_btn.tooltip_text = "把整曲实时录制成 WAV 文件（游戏引擎可直接用）"
@@ -432,13 +452,13 @@ func _build_options() -> Control:
 	midi_out_btn.tooltip_text = "导出为标准 MIDI 文件（.mid），可导入其他音乐软件"
 	var score_btn := _mk_button("导出乐谱", _on_score_export)
 	score_btn.tooltip_text = "导出 MusicXML 乐谱（.musicxml），用 MuseScore（免费）等打开即可查看/打印"
-	var save_btn := _mk_button("保存", _on_save)
-	save_btn.tooltip_text = "保存工程（.bsong）"
-	var open_btn := _mk_button("打开", _on_open)
-	open_btn.tooltip_text = "打开工程（.bsong）"
+	_save_btn = _mk_button("保存", _on_save)
+	_save_btn.tooltip_text = "保存工程（.bsong）"
+	_open_btn = _mk_button("打开", _on_open)
+	_open_btn.tooltip_text = "打开工程（.bsong）"
 	var demo_btn := _mk_button("示范曲", _on_demo)
-	demo_btn.tooltip_text = "重新载入《小星星》示范工程"
-	flow.add_child(_group("文件", [_export_btn, tracks_btn, midi_in_btn, midi_out_btn, score_btn, save_btn, open_btn, demo_btn]))
+	demo_btn.tooltip_text = "重新载入示范曲《虫儿飞》示范工程"
+	flow.add_child(_group("文件", [_export_btn, tracks_btn, midi_in_btn, midi_out_btn, score_btn, _save_btn, _open_btn, demo_btn]))
 	return flow
 
 
@@ -454,7 +474,7 @@ func _build_tabs(parent: Control) -> void:
 	play.name = "演奏"
 	play.add_theme_constant_override("separation", GAP_Y)
 	var hint := Label.new()
-	hint.text = "电脑键盘 = 琴键：Z 行低八度 · Q 行高八度（键帽字母印在琴键上）· ↑/↓ 切换八度 · 鼠标点击/滑奏可弹 · 「和弦模式」按一键出整个和弦 · 「冻结模式」依次按下的音保持冻结、按新键全体齐鸣（破解键盘只能同按 2-3 键的硬件限制）· 空格=播放/停止 · Ctrl+Z 撤销 / Ctrl+Y 重做 · 键盘上 Ctrl+滚轮缩放　　提示：同按多个键受键盘硬件限制（普通键盘仅 2-6 键防串扰），多音同奏请用「和弦模式」「冻结模式」或鼠标滑奏"
+	hint.text = "电脑键盘 = 琴键：Z 行低八度 · Q 行高八度（键帽字母印在琴键上）· ↑/↓ 切换八度 · 鼠标点击/滑奏可弹 · 「音色」组可换轨道与音色，切换即试听 · 「和弦模式」按一键出整个和弦 · 「冻结模式」依次按下的音保持冻结、按新键全体齐鸣（破解键盘只能同按 2-3 键的硬件限制）· 空格=播放/停止 · Ctrl+Z 撤销 / Ctrl+Y 重做 · 键盘上 Ctrl+滚轮缩放　　提示：同按多个键受键盘硬件限制（普通键盘仅 2-6 键防串扰），多音同奏请用「和弦模式」「冻结模式」或鼠标滑奏"
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.add_theme_font_size_override("font_size", 12)
 	hint.custom_minimum_size = Vector2(0, 42)
@@ -482,6 +502,16 @@ func _build_tabs(parent: Control) -> void:
 	_kb_span.item_selected.connect(_on_kb_span_changed)
 	_kb_span.tooltip_text = "演奏键盘跨度（1–4 个八度）"
 	kb_row.add_child(_group("键盘大小", [_mk_label("键宽"), _kb_scale, _kb_scale_lab, _mk_label("跨度"), _kb_span]))
+	# 音色组：演奏页直接切轨/切音色（以前只在编曲页轨道列表里有，用户找不到）
+	_play_track_opt = OptionButton.new()
+	_play_track_opt.focus_mode = Control.FOCUS_NONE
+	_play_track_opt.item_selected.connect(_on_play_track_changed)
+	_play_track_opt.tooltip_text = "当前演奏/录制写入的轨道"
+	_play_inst_opt = OptionButton.new()
+	_play_inst_opt.focus_mode = Control.FOCUS_NONE
+	_play_inst_opt.item_selected.connect(_on_play_inst_changed)
+	_play_inst_opt.tooltip_text = "当前轨道的音色（切换后自动试听一个音）"
+	kb_row.add_child(_group("音色", [_play_track_opt, _play_inst_opt]))
 	var kb_spacer := Control.new()
 	kb_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	kb_row.add_child(kb_spacer)
@@ -861,6 +891,64 @@ func _update_oct_label() -> void:
 	_oct_label.text = "八度：C%d – C%d" % [keyboard.base_octave, keyboard.base_octave + keyboard.octaves]
 
 
+## ── 演奏页音色组：轨道/音色选择 ↔ 工程状态同步 ─────────────────────
+
+## 换歌 / 换轨 / 结构变化 / 撤销还原后统一走这里，把演奏页下拉刷成工程现状
+func _sync_play_inst_ui() -> void:
+	if _play_track_opt == null or song == null or song.tracks.is_empty():
+		return
+	_syncing_play_ui = true
+	var sel := clampi(_sel_track, 0, song.tracks.size() - 1)
+	_play_track_opt.clear()
+	for i in song.tracks.size():
+		_play_track_opt.add_item("%d·%s" % [i + 1, song.tracks[i]["name"]])
+	_play_track_opt.select(sel)
+	_refresh_play_inst_items()
+	_syncing_play_ui = false
+
+
+func _refresh_play_inst_items() -> void:
+	var trk: Dictionary = song.tracks[_sel_track]
+	_play_inst_opt.clear()
+	if trk.get("type", "melody") == "drum":
+		_play_inst_opt.add_item("鼓组")
+		_play_inst_opt.select(0)
+		_play_inst_opt.disabled = true
+		return
+	_play_inst_opt.disabled = false
+	for inst in InstrumentBank.instruments:
+		_play_inst_opt.add_item(inst)
+	_play_inst_opt.select(maxi(InstrumentBank.instruments.find(trk["instrument"]), 0))
+
+
+func _on_play_track_changed(i: int) -> void:
+	if _syncing_play_ui:
+		return
+	_sel_track = clampi(i, 0, song.tracks.size() - 1)
+	if track_list != null:
+		track_list.sel = _sel_track
+		track_list.refresh()
+	roll.track_idx = _sel_track
+	_sync_drum_panel()
+	_syncing_play_ui = true
+	_refresh_play_inst_items()
+	_syncing_play_ui = false
+	_update_status("当前轨道：%d·%s" % [_sel_track + 1, song.tracks[_sel_track]["name"]])
+
+
+func _on_play_inst_changed(i: int) -> void:
+	if _syncing_play_ui or i < 0 or i >= InstrumentBank.instruments.size():
+		return
+	if song.tracks[_sel_track].get("type", "melody") == "drum":
+		return
+	var inst: String = InstrumentBank.instruments[i]
+	song.tracks[_sel_track]["instrument"] = inst
+	history.push(song)
+	# 即时试听：换音色立刻弹一个音，所见即所听
+	Synth.play_note_on_track(_sel_track, inst, 64, 0.9)
+	_update_status("第 %d 轨音色 → %s" % [_sel_track + 1, inst])
+
+
 ## 走带音符触发（编曲播放）：按轨发声 + 回声条可视化反馈
 func _on_note_fired(trk: int, pitch: int, vel: float) -> void:
 	Synth.play_note_on_track(trk, song.tracks[trk]["instrument"], pitch, vel)
@@ -1062,6 +1150,7 @@ func _on_track_selected(idx: int) -> void:
 	_sel_track = idx
 	roll.track_idx = idx
 	_sync_drum_panel()
+	_sync_play_inst_ui()   # 演奏页音色组跟随当前轨
 
 
 ## 轨道行参数变化：即时刷总线；pushed=true 的改动落历史快照
@@ -1108,6 +1197,7 @@ func _refresh_track_ui() -> void:
 		mixer.refresh()
 	Synth.apply_mix(song.tracks)
 	_sync_drum_panel()
+	_sync_play_inst_ui()
 
 
 func _on_tab_changed(idx: int) -> void:
@@ -1160,7 +1250,7 @@ func _on_opened(path: String) -> void:
 
 func _on_demo() -> void:
 	_switch_song(SongModel.make_demo())
-	_update_status("已加载示范曲《小星星》")
+	_update_status("已加载示范曲《虫儿飞》")
 
 
 ## ── MIDI 导入导出 ──────────────────────────────────────────────────
