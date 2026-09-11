@@ -297,14 +297,12 @@ func _mouse_motion(pos_m: InputEventMouseMotion) -> void:
 			if np != note["p"] or ns != note["s"]:
 				# 批量移动：目标音符在选区 → 整组按同一位移移动
 				if _selected.has(note):
-					var moved := false
 					for sel in _selected:
 						var sp: int = clampi(int(sel["p"]) + dpitch, PITCH_MIN, PITCH_MAX)
 						var ss: int = maxi(int(sel["s"]) + dtick, 0)
 						if sp != sel["p"] or ss != sel["s"]:
 							sel["p"] = sp
 							sel["s"] = ss
-							moved = true
 					_drag_orig = {"p": np, "s": ns, "l": note["l"]}
 					_drag_ref_tick = tick_f
 					_drag_ref_pitch = _pitch_at(pos.y)

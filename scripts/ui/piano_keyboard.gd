@@ -245,7 +245,6 @@ func _draw() -> void:
 	var L := _layout()
 	var ox: float = L["ox"]
 	var oy: float = L["oy"]
-	var ww: float = L["ww"]
 	var kb_w: float = L["kb_w"]
 	var kb_h: float = L["fall_h"] + L["keys_h"] + L["rail_h"]
 	var keys_top: float = L["keys_top"]

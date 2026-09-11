@@ -246,7 +246,7 @@ static func detect_sections(song: SongModel, sim_threshold := 0.82) -> Array:
 		v.resize(12)
 		for i in 12:
 			v[i] = 0.0
-		var cnt := 0
+		var cnt := 0.0
 		for trk in song.tracks:
 			for n in trk["notes"]:
 				var ov: int = mini(n["s"] + n["l"], (bar + 1) * 16) - maxi(n["s"], bar * 16)
